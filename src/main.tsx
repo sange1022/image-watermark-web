@@ -21,6 +21,9 @@ import './styles.css';
 import { defaultColor, type ColorSettings } from './color';
 import { colorCanvas, loadCube } from './color-client';
 
+const builtinLut = { id: 'builtin-qingyu-0065', name: '青鱼表现0065', size: 32 };
+const builtinLutUrl = new URL('./presets/qingyu-0065.cube', import.meta.url).href;
+
 type AspectRatio = { label: string; tag: string; width: number; height: number };
 type CropRect = { x: number; y: number; width: number; height: number };
 type WatermarkPosition =
@@ -118,7 +121,8 @@ function App() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const watermarkInputRef = useRef<HTMLInputElement>(null);
   const lutInputRef = useRef<HTMLInputElement>(null);
-  const [luts, setLuts] = useState<{ id: string; name: string; size: number }[]>([]);
+  const [luts, setLuts] = useState<{ id: string; name: string; size: number }[]>([builtinLut]);
+  const builtinLoaded = useRef(false);
   const [lutLoading, setLutLoading] = useState(false);
   const [colorError, setColorError] = useState('');
   const [previewBusy, setPreviewBusy] = useState(false);
@@ -368,6 +372,25 @@ function App() {
   function updateColor(patch: Partial<ColorSettings>) {
     if (!selectedPhoto || exportLock.current) return;
     updatePhoto(selectedPhoto.id, photo => ({ ...photo, color: { ...photo.color, ...patch }, status: '已调整' }));
+  }
+
+  async function selectLut(lutId: string) {
+    if (!selectedPhoto || lutLoading || exportLock.current) return;
+    const photoId = selectedPhoto.id;
+    if (lutId !== builtinLut.id || builtinLoaded.current) {
+      updateColor({ lutId, lutEnabled: Boolean(lutId) });
+      return;
+    }
+    setLutLoading(true);
+    setColorError('');
+    try {
+      const response = await fetch(builtinLutUrl);
+      if (!response.ok) throw new Error('内置 LUT 加载失败，请重试');
+      await loadCube(new File([await response.blob()], 'qingyu-0065.cube'), builtinLut.id);
+      builtinLoaded.current = true;
+      updatePhoto(photoId, photo => ({ ...photo, color: { ...photo.color, lutId, lutEnabled: true }, status: '已调整' }));
+    } catch (error) { setColorError(error instanceof Error ? error.message : String(error)); }
+    finally { setLutLoading(false); }
   }
 
   async function importLut(file: File | undefined) {
@@ -752,7 +775,7 @@ function App() {
                   <label className="check-row"><input type="checkbox" checked={color.lutEnabled} disabled={!color.lutId} onChange={event => updateColor({ lutEnabled: event.target.checked })} />启用 LUT</label>
                   <input ref={lutInputRef} type="file" accept=".cube" hidden onChange={event => { void importLut(event.target.files?.[0]); event.target.value = ''; }} />
                   <div className="lut-file-row">
-                    <select aria-label="当前图片 LUT" value={color.lutId} onChange={event => updateColor({ lutId: event.target.value, lutEnabled: Boolean(event.target.value) })}>
+                    <select aria-label="当前图片 LUT" disabled={lutLoading} value={color.lutId} onChange={event => void selectLut(event.target.value)}>
                       <option value="">未选择 LUT</option>
                       {luts.map(lut => <option key={lut.id} value={lut.id}>{lut.name} · {lut.size}³</option>)}
                     </select>
