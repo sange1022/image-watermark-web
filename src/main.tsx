@@ -378,7 +378,7 @@ function App() {
     if (!selectedPhoto || lutLoading || exportLock.current) return;
     const photoId = selectedPhoto.id;
     if (lutId !== builtinLut.id || builtinLoaded.current) {
-      updateColor({ lutId, lutEnabled: Boolean(lutId) });
+      updateColor({ lutId, lutEnabled: Boolean(lutId), enabled: Boolean(lutId) || color.enabled });
       return;
     }
     setLutLoading(true);
@@ -388,7 +388,7 @@ function App() {
       if (!response.ok) throw new Error('内置 LUT 加载失败，请重试');
       await loadCube(new File([await response.blob()], 'qingyu-0065.cube'), builtinLut.id);
       builtinLoaded.current = true;
-      updatePhoto(photoId, photo => ({ ...photo, color: { ...photo.color, lutId, lutEnabled: true }, status: '已调整' }));
+      updatePhoto(photoId, photo => ({ ...photo, color: { ...photo.color, lutId, lutEnabled: true, enabled: true }, status: '已调整' }));
     } catch (error) { setColorError(error instanceof Error ? error.message : String(error)); }
     finally { setLutLoading(false); }
   }
@@ -402,7 +402,7 @@ function App() {
       const id = crypto.randomUUID();
       const size = await loadCube(file, id);
       setLuts(items => [...items, { id, name: file.name, size }]);
-      updatePhoto(photoId, photo => ({ ...photo, color: { ...photo.color, lutId: id, lutEnabled: true }, status: '已调整' }));
+      updatePhoto(photoId, photo => ({ ...photo, color: { ...photo.color, lutId: id, lutEnabled: true, enabled: true }, status: '已调整' }));
       setStatus(`已导入 LUT：${file.name}`);
     } catch (error) { setColorError(error instanceof Error ? error.message : String(error)); }
     finally { setLutLoading(false); }
@@ -771,8 +771,9 @@ function App() {
                   ))}
                 </div>
                 <div className="color-actions"><button title="还原调色数值" aria-label="还原调色数值" onClick={() => updateColor({ hue: 50, saturation: 50, brightness: 50, contrast: 50 })}><RotateCcw size={15} /></button></div>
+              </fieldset>
                 <div className="lut-controls">
-                  <label className="check-row"><input type="checkbox" checked={color.lutEnabled} disabled={!color.lutId} onChange={event => updateColor({ lutEnabled: event.target.checked })} />启用 LUT</label>
+                  <label className="check-row"><input type="checkbox" checked={color.enabled && color.lutEnabled} disabled={lutLoading} onChange={event => { if (event.target.checked) void selectLut(color.lutId || builtinLut.id); else updateColor({ lutEnabled: false }); }} />启用 LUT</label>
                   <input ref={lutInputRef} type="file" accept=".cube" hidden onChange={event => { void importLut(event.target.files?.[0]); event.target.value = ''; }} />
                   <div className="lut-file-row">
                     <select aria-label="当前图片 LUT" disabled={lutLoading} value={color.lutId} onChange={event => void selectLut(event.target.value)}>
@@ -781,10 +782,9 @@ function App() {
                     </select>
                     <button disabled={lutLoading} title="导入 .cube LUT" aria-label="导入 LUT" onClick={() => lutInputRef.current?.click()}><Upload size={15} /></button>
                   </div>
-                  <fieldset disabled={!color.lutEnabled}><ColorControl label="LUT 强度" value={color.intensity} onChange={value => updateColor({ intensity: value })} /></fieldset>
+                  <fieldset disabled={!color.enabled || !color.lutEnabled}><ColorControl label="LUT 强度" value={color.intensity} onChange={value => updateColor({ intensity: value })} /></fieldset>
                   {lutLoading && <p className="note">正在读取 LUT…</p>}
                 </div>
-              </fieldset>
             </fieldset>
             {colorError && <p className="color-error" role="alert">{colorError}</p>}
           </ControlSection>
