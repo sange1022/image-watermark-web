@@ -14,6 +14,8 @@ import {
   RotateCcw,
   Trash2,
   Upload,
+  Undo2,
+  X,
 } from 'lucide-react';
 import './styles.css';
 
@@ -98,28 +100,46 @@ declare global {
   }
 }
 
+const settingsKey = 'watermark-settings-v1';
+function readSettings() {
+  try {
+    const value = JSON.parse(localStorage.getItem(settingsKey) || 'null');
+    if (value?.version !== 1) return null;
+    if (!value.aspectRatio || !Number.isFinite(value.aspectRatio.width) || !Number.isFinite(value.aspectRatio.height) || value.aspectRatio.width <= 0 || value.aspectRatio.height <= 0) return null;
+    return value;
+  } catch { return null; }
+}
+
 function App() {
+  const [saved] = useState(readSettings);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const watermarkInputRef = useRef<HTMLInputElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [aspectRatio, setAspectRatio] = useState<AspectRatio>(aspectRatios[2]);
-  const [cropMode, setCropMode] = useState<'smart' | 'center'>('smart');
-  const [customRatio, setCustomRatio] = useState({ width: 5, height: 7 });
-  const [customSize, setCustomSize] = useState({ width: 1200, height: 1600 });
-  const [sizeIndex, setSizeIndex] = useState(1);
-  const [format, setFormat] = useState<'jpg' | 'png' | 'webp'>('jpg');
-  const [watermark, setWatermark] = useState<WatermarkSettings>(defaultWatermark);
+  const [aspectRatio, setAspectRatio] = useState<AspectRatio>(saved?.aspectRatio ?? aspectRatios[2]);
+  const [cropMode, setCropMode] = useState<'smart' | 'center'>(saved?.cropMode ?? 'smart');
+  const [customRatio, setCustomRatio] = useState(saved?.customRatio ?? { width: 5, height: 7 });
+  const [customSize, setCustomSize] = useState(saved?.customSize ?? { width: 1200, height: 1600 });
+  const [sizeIndex, setSizeIndex] = useState(saved?.sizeIndex ?? 1);
+  const [format, setFormat] = useState<'jpg' | 'png' | 'webp'>(saved?.format ?? 'jpg');
+  const [watermark, setWatermark] = useState<WatermarkSettings>({ ...defaultWatermark, ...saved?.watermark, enabled: false });
   const [watermarkFile, setWatermarkFile] = useState<File | null>(null);
   const [watermarkUrl, setWatermarkUrl] = useState('');
   const [watermarkImage, setWatermarkImage] = useState<HTMLImageElement | null>(null);
   const [directoryHandle, setDirectoryHandle] = useState<FileSystemDirectoryHandle | null>(null);
-  const [status, setStatus] = useState('准备就绪 · ← → 切换图片 · 拖动裁剪框 · 滚轮缩放 · R 复位');
+  const [status, setStatus] = useState('准备就绪');
   const [exportProgress, setExportProgress] = useState(0);
+  const [exporting, setExporting] = useState(false);
+  const exportLock = useRef(false);
+  const cancelled = useRef(false);
+  const [failures, setFailures] = useState<{ id: string; name: string; reason: string }[]>([]);
+  const [history, setHistory] = useState<{ id: string; crop: CropRect }[]>([]);
+  const resources = useRef(new Set<string>());
   const [dragState, setDragState] = useState<
     | { type: 'crop'; startX: number; startY: number; crop: CropRect }
+    | { type: 'resize'; corner: number; crop: CropRect }
     | { type: 'watermark'; startX: number; startY: number; settings: WatermarkSettings }
     | null
   >(null);
@@ -130,9 +150,11 @@ function App() {
   const canUseDirectoryPicker = typeof window.showDirectoryPicker === 'function';
 
   useEffect(() => {
-    setCustomSize(sizePresets[Math.min(1, sizePresets.length - 1)]);
-    setSizeIndex(Math.min(1, sizePresets.length - 1));
-  }, [sizePresets]);
+    const timer = window.setTimeout(() => {
+      try { localStorage.setItem(settingsKey, JSON.stringify({ version: 1, aspectRatio, cropMode, customRatio, customSize, sizeIndex, format, watermark })); } catch { /* Storage may be unavailable in private sessions. */ }
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [aspectRatio, cropMode, customRatio, customSize, sizeIndex, format, watermark]);
 
   useEffect(() => {
     drawPreview();
@@ -146,14 +168,13 @@ function App() {
 
   useEffect(() => {
     return () => {
-      photos.forEach((photo) => URL.revokeObjectURL(photo.url));
-      if (watermarkUrl) URL.revokeObjectURL(watermarkUrl);
+      resources.current.forEach((url) => URL.revokeObjectURL(url));
     };
-  }, [photos, watermarkUrl]);
+  }, []);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (!selectedPhoto) return;
+      if (!selectedPhoto || exportLock.current || (event.target instanceof HTMLElement && event.target.closest('input, select, textarea, [contenteditable]'))) return;
       const index = photos.findIndex((photo) => photo.id === selectedPhoto.id);
       if (event.key === 'ArrowLeft' && index > 0) setSelectedId(photos[index - 1].id);
       if (event.key === 'ArrowRight' && index < photos.length - 1) setSelectedId(photos[index + 1].id);
@@ -168,6 +189,7 @@ function App() {
   }, []);
 
   async function addFiles(fileList: FileList | File[]) {
+    if (exportLock.current) return;
     const files = Array.from(fileList).filter((file) => file.type.startsWith('image/'));
     if (files.length === 0) {
       setStatus('没有找到可读取的图片。');
@@ -179,7 +201,9 @@ function App() {
       const file = files[index];
       setStatus(`正在读取 ${index + 1}/${files.length}：${file.name}`);
       const url = URL.createObjectURL(file);
-      const image = await loadImage(url);
+      resources.current.add(url);
+      let image: HTMLImageElement;
+      try { image = await loadImage(url); } catch { URL.revokeObjectURL(url); resources.current.delete(url); setStatus(`无法读取：${file.name}`); continue; }
       const crop = cropMode === 'smart' ? createSmartCrop(image, aspectRatio) : createCenteredCrop(image.width, image.height, aspectRatio);
       loaded.push({
         id: `${file.name}-${file.lastModified}-${crypto.randomUUID()}`,
@@ -209,18 +233,23 @@ function App() {
     URL.revokeObjectURL(selectedPhoto.url);
     const next = photos[index + 1] ?? photos[index - 1] ?? null;
     setSelectedId(next?.id ?? null);
+    setHistory((items) => items.filter((item) => item.id !== selectedPhoto.id));
+    setFailures((items) => items.filter((item) => item.id !== selectedPhoto.id));
   }
 
   function clearPhotos() {
     photos.forEach((photo) => URL.revokeObjectURL(photo.url));
     setPhotos([]);
     setSelectedId(null);
+    setHistory([]);
+    setFailures([]);
     setExportProgress(0);
     setStatus('已清空图片列表');
   }
 
   function centerSelectedCrop() {
     if (!selectedPhoto) return;
+    rememberCrop();
     updatePhoto(selectedPhoto.id, (photo) => ({
       ...photo,
       crop: createCenteredCrop(photo.width, photo.height, aspectRatio),
@@ -231,6 +260,7 @@ function App() {
 
   function smartCropSelected() {
     if (!selectedPhoto) return;
+    rememberCrop();
     updatePhoto(selectedPhoto.id, (photo) => ({
       ...photo,
       crop: createSmartCrop(photo.image, aspectRatio),
@@ -240,7 +270,11 @@ function App() {
   }
 
   function applyAspectRatio(next: AspectRatio) {
+    if (![next.width, next.height].every((value) => Number.isFinite(value) && value > 0 && value <= 1000)) { setStatus('比例请输入 1 至 1000 之间的有效数值'); return; }
     setAspectRatio(next);
+    setSizeIndex(1);
+    setCustomSize(getPresetSizes(next)[1]);
+    setHistory([]);
     setPhotos((items) =>
       items.map((item) => ({
         ...item,
@@ -264,19 +298,13 @@ function App() {
     }
   }
 
-  function openOutputFolder() {
-    if (directoryHandle) {
-      setStatus(`浏览器已授权保存到“${directoryHandle.name}”。网页不能直接打开系统文件夹，请在本机文件管理器中查看。`);
-      return;
-    }
-    setStatus(canUseDirectoryPicker ? '请先选择保存位置。' : '网页版本会导出 ZIP 下载，浏览器不允许直接打开本地保存位置。');
-  }
-
   async function handleWatermarkUpload(files: FileList | null) {
     const file = files?.[0];
     if (!file) return;
     const url = URL.createObjectURL(file);
-    const image = await loadImage(url);
+    resources.current.add(url);
+    let image: HTMLImageElement;
+    try { image = await loadImage(url); } catch { URL.revokeObjectURL(url); setStatus('水印图片无法读取，请重新选择'); return; }
     if (watermarkUrl) URL.revokeObjectURL(watermarkUrl);
     setWatermarkFile(file);
     setWatermarkUrl(url);
@@ -286,17 +314,27 @@ function App() {
   }
 
   function handlePointerDown(event: React.PointerEvent<HTMLCanvasElement>) {
-    if (!selectedPhoto) return;
+    if (!selectedPhoto || exporting) return;
     const point = getCanvasPoint(event);
     const layout = getPreviewLayout();
     if (!layout) return;
+    const cropDisplay = toDisplayRect(selectedPhoto.crop, layout);
+    const corners = [[cropDisplay.x, cropDisplay.y], [cropDisplay.x + cropDisplay.width, cropDisplay.y], [cropDisplay.x, cropDisplay.y + cropDisplay.height], [cropDisplay.x + cropDisplay.width, cropDisplay.y + cropDisplay.height]];
+    const corner = corners.findIndex(([x, y]) => Math.hypot(point.x - x, point.y - y) <= 18);
+    if (corner >= 0) {
+      rememberCrop();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      setDragState({ type: 'resize', corner, crop: selectedPhoto.crop });
+      return;
+    }
     const watermarkRect = watermarkImage ? getWatermarkRect(watermark, exportSize, watermarkImage) : null;
-    if (watermark.enabled && watermarkRect && pointInDisplayRect(point, toDisplayRect(watermarkRect, layout))) {
+    if (watermark.enabled && watermarkRect && pointInDisplayRect(point, toDisplayRect(watermarkRect, { left: cropDisplay.x, top: cropDisplay.y, scale: cropDisplay.width / exportSize.width }))) {
       event.currentTarget.setPointerCapture(event.pointerId);
       setDragState({ type: 'watermark', startX: point.x, startY: point.y, settings: watermark });
       return;
     }
     if (pointInDisplayRect(point, toDisplayRect(selectedPhoto.crop, layout))) {
+      rememberCrop();
       event.currentTarget.setPointerCapture(event.pointerId);
       setDragState({ type: 'crop', startX: point.x, startY: point.y, crop: selectedPhoto.crop });
     }
@@ -307,6 +345,21 @@ function App() {
     const point = getCanvasPoint(event);
     const layout = getPreviewLayout();
     if (!layout) return;
+    if (dragState.type === 'resize') {
+      const { crop, corner } = dragState;
+      const right = corner % 2 === 1;
+      const bottom = corner >= 2;
+      const ax = right ? crop.x : crop.x + crop.width;
+      const ay = bottom ? crop.y : crop.y + crop.height;
+      const target = aspectRatio.width / aspectRatio.height;
+      const dx = ((point.x - layout.left) / layout.scale - ax) * (right ? 1 : -1);
+      const dy = ((point.y - layout.top) / layout.scale - ay) * (bottom ? 1 : -1);
+      const maxWidth = Math.min(right ? selectedPhoto.width - ax : ax, (bottom ? selectedPhoto.height - ay : ay) * target);
+      const width = clamp((dx + dy / target) / (1 + 1 / (target * target)), Math.min(30, maxWidth), maxWidth);
+      const height = width / target;
+      updatePhoto(selectedPhoto.id, (photo) => ({ ...photo, crop: { x: right ? ax : ax - width, y: bottom ? ay : ay - height, width, height }, status: '已调整' }));
+      return;
+    }
     if (dragState.type === 'crop') {
       const dx = (point.x - dragState.startX) / layout.scale;
       const dy = (point.y - dragState.startY) / layout.scale;
@@ -329,8 +382,8 @@ function App() {
   }
 
   function handleWheel(event: React.WheelEvent<HTMLCanvasElement>) {
-    if (!selectedPhoto) return;
-    event.preventDefault();
+    if (!selectedPhoto || exporting) return;
+    rememberCrop();
     const factor = event.deltaY < 0 ? 0.94 : 1.06;
     updatePhoto(selectedPhoto.id, (photo) => ({
       ...photo,
@@ -339,48 +392,90 @@ function App() {
     }));
   }
 
-  async function exportAll() {
-    if (photos.length === 0) {
+  function rememberCrop() {
+    if (selectedPhoto) setHistory((items) => [...items.slice(-49), { id: selectedPhoto.id, crop: { ...selectedPhoto.crop } }]);
+  }
+
+  function undoCrop() {
+    const previous = history.at(-1);
+    if (!previous) return;
+    updatePhoto(previous.id, (photo) => ({ ...photo, crop: previous.crop, status: '已撤销' }));
+    setSelectedId(previous.id);
+    setHistory((items) => items.slice(0, -1));
+  }
+
+  async function exportAll(retryOnly = false) {
+    if (exportLock.current) return;
+    const queue = retryOnly ? photos.filter((photo) => failures.some((failure) => failure.id === photo.id)) : photos;
+    if (queue.length === 0) {
       setStatus('请先添加图片。');
       return;
     }
+    if (![exportSize.width, exportSize.height].every((value) => Number.isInteger(value) && value > 0 && value <= 8192) || exportSize.width * exportSize.height > 40000000) { setStatus('导出尺寸须为 1 至 8192 的整数，且总像素不超过 4000 万'); return; }
+    if (watermark.enabled && !watermarkImage) { setStatus('请先选择水印图片'); return; }
+    exportLock.current = true;
+    cancelled.current = false;
+    setExporting(true);
     setExportProgress(0);
-    const failures: string[] = [];
-    const exported: { name: string; blob: Blob }[] = [];
+    setFailures([]);
+    const errors: { id: string; name: string; reason: string }[] = [];
+    const zip = new JSZip();
+    let completed = 0;
+    const usedNames = new Set<string>();
+    try {
 
-    for (let index = 0; index < photos.length; index += 1) {
-      const photo = photos[index];
+    for (let index = 0; index < queue.length; index += 1) {
+      if (cancelled.current) break;
+      const photo = queue[index];
       updatePhoto(photo.id, (item) => ({ ...item, status: '正在导出' }));
       try {
         const blob = await renderExport(photo, exportSize, format, watermark, watermarkImage);
-        const name = createOutputName(photo.name, format);
-        exported.push({ name, blob });
+        if (cancelled.current) { updatePhoto(photo.id, (item) => ({ ...item, status: '已取消' })); break; }
+        const baseName = createOutputName(photo.name, format, aspectRatio);
+        let name = baseName;
+        let suffix = 1;
+        while (true) {
+          let exists = usedNames.has(name.toLowerCase());
+          if (directoryHandle && !exists) {
+            try { await directoryHandle.getFileHandle(name); exists = true; } catch (error) { if (!(error instanceof DOMException && error.name === 'NotFoundError')) throw error; }
+          }
+          if (!exists) break;
+          name = baseName.replace(/\.[^.]+$/, `_${suffix++}.${format}`);
+        }
+        usedNames.add(name.toLowerCase());
         if (directoryHandle) {
           const writable = await directoryHandle.getFileHandle(name, { create: true }).then((handle) => handle.createWritable());
           await writable.write(blob);
           await writable.close();
-        }
+        } else zip.file(name, blob);
+        completed += 1;
         updatePhoto(photo.id, (item) => ({ ...item, status: '已导出' }));
       } catch (error) {
-        failures.push(`${photo.name}: ${error instanceof Error ? error.message : String(error)}`);
+        errors.push({ id: photo.id, name: photo.name, reason: error instanceof Error ? error.message : String(error) });
+        setFailures([...errors]);
         updatePhoto(photo.id, (item) => ({ ...item, status: '失败' }));
       }
-      setExportProgress(((index + 1) / photos.length) * 100);
-      setStatus(`正在导出 ${index + 1}/${photos.length}`);
+      setExportProgress(((index + 1) / queue.length) * (directoryHandle ? 100 : 85));
+      setStatus(`正在导出 ${index + 1} / ${queue.length} 张`);
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
     }
 
-    if (!directoryHandle) {
-      const zip = new JSZip();
-      exported.forEach((file) => zip.file(file.name, file.blob));
-      const blob = await zip.generateAsync({ type: 'blob' });
+    if (!directoryHandle && completed && !cancelled.current) {
+      setStatus('正在打包 ZIP');
+      const blob = await zip.generateAsync({ type: 'blob' }, ({ percent }) => {
+        if (cancelled.current) throw new Error('已取消导出');
+        setExportProgress(85 + percent * 0.15);
+      });
+      if (cancelled.current) return;
       downloadBlob(blob, `水印导出-${new Date().toISOString().slice(0, 10)}.zip`);
     }
 
     setStatus(
-      failures.length === 0
-        ? `导出完成：${photos.length} 张${directoryHandle ? ` · ${directoryHandle.name}` : ' · ZIP 已下载'}`
-        : `导出完成，失败 ${failures.length} 张。`,
+      cancelled.current ? `已取消${directoryHandle ? `，已保存 ${completed} 张` : '，未下载 ZIP'}` : `导出完成：成功 ${completed} 张，失败 ${errors.length} 张${completed ? directoryHandle ? ` · ${directoryHandle.name}` : ' · ZIP 已下载' : ''}`,
     );
+    } catch (error) {
+      setStatus(cancelled.current ? '已取消导出' : `导出失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally { exportLock.current = false; setExporting(false); }
   }
 
   function drawPreview() {
@@ -426,6 +521,12 @@ function App() {
     context.moveTo(crop.x, crop.y + (crop.height * 2) / 3);
     context.lineTo(crop.x + crop.width, crop.y + (crop.height * 2) / 3);
     context.stroke();
+    for (const [x, y] of [[crop.x, crop.y], [crop.x + crop.width, crop.y], [crop.x, crop.y + crop.height], [crop.x + crop.width, crop.y + crop.height]]) {
+      context.fillStyle = '#ffffff';
+      context.fillRect(x - 5, y - 5, 10, 10);
+      context.strokeStyle = '#007aff';
+      context.strokeRect(x - 5, y - 5, 10, 10);
+    }
 
     if (watermark.enabled && watermarkImage) {
       const wm = toDisplayRect(getWatermarkRect(watermark, exportSize, watermarkImage), {
@@ -480,21 +581,22 @@ function App() {
             <p>离线批量裁剪与水印</p>
           </div>
         </div>
-        <div className="toolbar-actions">
+        <fieldset className="toolbar-actions" disabled={exporting}>
           <input ref={fileInputRef} type="file" accept="image/*" multiple hidden onChange={(event) => addFiles(event.target.files ?? [])} />
           <button className="primary" onClick={() => fileInputRef.current?.click()}><ImagePlus size={17} />添加图片</button>
           <button onClick={removeSelected}><Trash2 size={16} />移除</button>
           <button onClick={clearPhotos}><Eraser size={16} />清空列表</button>
           <button onClick={centerSelectedCrop}><LocateFixed size={16} />居中裁剪</button>
           <button onClick={smartCropSelected}><Brain size={16} />智能定位</button>
-        </div>
+          <button title="撤销裁剪" aria-label="撤销裁剪" disabled={!history.length} onClick={undoCrop}><Undo2 size={16} /></button>
+        </fieldset>
       </header>
 
       <section className="workspace">
         <aside className="panel photo-rail">
           <div className="panel-head">
             <strong>图片列表 · {photos.length} 张</strong>
-            <span>拖入图片或文件夹也可以添加</span>
+            <span>{photos.length ? `${photos.filter((photo) => photo.status === '已导出').length} 张已导出` : '尚未添加图片'}</span>
           </div>
           <div className="photo-list">
             {photos.map((photo) => (
@@ -513,7 +615,7 @@ function App() {
         <section ref={previewRef} className="preview panel">
           {!selectedPhoto && (
             <div className="empty-hint">
-              <strong>把图片或文件夹拖到这里</strong>
+              <strong>添加图片</strong>
               <span>所有处理都在本机完成</span>
             </div>
           )}
@@ -526,10 +628,13 @@ function App() {
               event.currentTarget.releasePointerCapture(event.pointerId);
             }}
             onWheel={handleWheel}
+            onPointerCancel={() => setDragState(null)}
+            aria-label="图片裁剪预览"
           />
         </section>
 
         <aside className="panel inspector">
+          <fieldset disabled={exporting}>
           <ControlSection title="裁剪设置">
             <label>初始定位方式</label>
             <select value={cropMode} onChange={(event) => setCropMode(event.target.value as 'smart' | 'center')}>
@@ -537,7 +642,8 @@ function App() {
               <option value="center">居中裁剪</option>
             </select>
             <label>比例</label>
-            <select value={aspectRatio.tag} onChange={(event) => {
+            <select aria-label="裁剪比例" value={aspectRatio.tag} onChange={(event) => {
+              if (event.target.value === 'custom') { applyAspectRatio({ label: '自定义比例', tag: 'custom', ...customRatio }); return; }
               const next = aspectRatios.find((ratio) => ratio.tag === event.target.value);
               if (next) applyAspectRatio(next);
             }}>
@@ -546,9 +652,9 @@ function App() {
             </select>
             {aspectRatio.tag === 'custom' && (
               <div className="inline-grid">
-                <input value={customRatio.width} onChange={(event) => setCustomRatio({ ...customRatio, width: Number(event.target.value) })} />
+                <input aria-label="比例宽" type="number" min="1" max="1000" value={customRatio.width} onChange={(event) => setCustomRatio({ ...customRatio, width: Number(event.target.value) })} />
                 <span>:</span>
-                <input value={customRatio.height} onChange={(event) => setCustomRatio({ ...customRatio, height: Number(event.target.value) })} />
+                <input aria-label="比例高" type="number" min="1" max="1000" value={customRatio.height} onChange={(event) => setCustomRatio({ ...customRatio, height: Number(event.target.value) })} />
                 <button onClick={() => applyAspectRatio({ label: '自定义比例', tag: 'custom', width: customRatio.width, height: customRatio.height })}>应用</button>
               </div>
             )}
@@ -561,7 +667,7 @@ function App() {
               <input readOnly value={watermarkFile?.name ?? ''} placeholder="未选择水印图片" />
               <button onClick={() => watermarkInputRef.current?.click()}><Upload size={16} />选择 PNG</button>
             </div>
-            <label>位置（也可在预览中直接拖动）</label>
+            <label>位置</label>
             <select value={watermark.position} onChange={(event) => setWatermark({ ...watermark, position: event.target.value as WatermarkPosition })}>
               {positionOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
             </select>
@@ -577,19 +683,19 @@ function App() {
 
           <ControlSection title="导出设置">
             <label>图片尺寸</label>
-            <select value={sizeIndex} onChange={(event) => setSizeIndex(Number(event.target.value))}>
+            <select aria-label="图片尺寸" value={sizeIndex} onChange={(event) => setSizeIndex(Number(event.target.value))}>
               {sizePresets.map((size, index) => <option key={`${size.width}-${size.height}`} value={index}>{size.width} × {size.height}</option>)}
               <option value={sizePresets.length}>自定义</option>
             </select>
             {sizeIndex === sizePresets.length && (
               <div className="size-grid">
-                <input value={customSize.width} onChange={(event) => setCustomSize({ ...customSize, width: Number(event.target.value) })} />
+                <input aria-label="导出宽度" type="number" min="1" max="8192" value={customSize.width} onChange={(event) => setCustomSize({ ...customSize, width: Number(event.target.value) })} />
                 <span>×</span>
-                <input value={customSize.height} onChange={(event) => setCustomSize({ ...customSize, height: Number(event.target.value) })} />
+                <input aria-label="导出高度" type="number" min="1" max="8192" value={customSize.height} onChange={(event) => setCustomSize({ ...customSize, height: Number(event.target.value) })} />
               </div>
             )}
             <label>输出格式</label>
-            <select value={format} onChange={(event) => setFormat(event.target.value as 'jpg' | 'png' | 'webp')}>
+            <select aria-label="输出格式" value={format} onChange={(event) => setFormat(event.target.value as 'jpg' | 'png' | 'webp')}>
               <option value="jpg">JPG</option>
               <option value="png">PNG</option>
               <option value="webp">WebP</option>
@@ -597,13 +703,18 @@ function App() {
             <label>保存位置</label>
             <div className="path-row">
               <input readOnly value={directoryHandle?.name ?? '浏览器下载 / ZIP'} />
-              <button onClick={chooseOutputFolder}><FolderOpen size={16} />选择文件夹</button>
-              <button onClick={openOutputFolder}><FolderOpen size={16} />打开</button>
+              {canUseDirectoryPicker && <button title="选择保存文件夹" aria-label="选择保存文件夹" onClick={chooseOutputFolder}><FolderOpen size={16} /></button>}
+              {directoryHandle && <button title="改为 ZIP 下载" aria-label="改为 ZIP 下载" onClick={() => setDirectoryHandle(null)}><X size={16} /></button>}
             </div>
-            <button className="export primary" onClick={exportAll}><Download size={17} />导出全部 {photos.length ? `${photos.length} 张` : ''}</button>
-            <progress value={exportProgress} max={100} />
-            <p className="note">所有图片均在浏览器本机处理，原图不会上传。</p>
           </ControlSection>
+          </fieldset>
+          <div className="export-actions">
+            <button className="export primary" disabled={!photos.length || exporting} onClick={() => exportAll()}><Download size={17} />{exporting ? '正在导出' : directoryHandle ? '保存到文件夹' : '下载 ZIP'} {photos.length ? `${photos.length} 张` : ''}</button>
+            {exporting && <button className="cancel" onClick={() => { cancelled.current = true; setStatus('正在取消…'); }}><X size={16} />取消导出</button>}
+            <progress aria-label="导出进度" value={exportProgress} max={100} />
+            <p className="export-status" role="status">{status}</p>
+            {failures.length > 0 && <div className="failures"><strong>失败 {failures.length} 张</strong><ul>{failures.map((failure) => <li key={failure.id}>{failure.name}：{failure.reason}</li>)}</ul><button disabled={exporting} onClick={() => exportAll(true)}><RotateCcw size={16} />重试失败项</button></div>}
+          </div>
         </aside>
       </section>
 
@@ -805,9 +916,9 @@ async function renderExport(photo: PhotoItem, output: ExportSize, format: string
   return blob;
 }
 
-function createOutputName(name: string, format: string) {
+function createOutputName(name: string, format: string, ratio: AspectRatio) {
   const base = name.replace(/\.[^.]+$/, '');
-  return `${base}_3x4.${format === 'jpg' ? 'jpg' : format}`;
+  return `${base}_${ratio.width}x${ratio.height}.${format}`;
 }
 
 function downloadBlob(blob: Blob, name: string) {
@@ -816,7 +927,7 @@ function downloadBlob(blob: Blob, name: string) {
   anchor.href = url;
   anchor.download = name;
   anchor.click();
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 function clamp(value: number, min: number, max: number) {

@@ -10,6 +10,14 @@
   box-sizing: border-box;
 }
 
+fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+button:disabled { opacity: .45; cursor: default; transform: none; }
+button:focus-visible { outline: 3px solid #80baff; outline-offset: 2px; }
+.export-status { font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; color: #6e6e73; }
+.cancel { width: 100%; margin: 8px 0; }
+.failures { font-size: 12px; color: #b42318; overflow-wrap: anywhere; }
+.failures ul { padding-left: 18px; max-height: 140px; overflow-y: auto; }
+
 body {
   margin: 0;
   min-width: 320px;
@@ -346,11 +354,13 @@ progress::-webkit-progress-value {
 
 .path-row {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
 .path-row input {
   min-width: 0;
+  flex: 1 1 120px;
 }
 
 .path-row button {
@@ -447,10 +457,12 @@ progress::-webkit-progress-value {
   }
 
   .photo-rail {
-    min-height: 220px;
+    height: 180px;
+    min-height: 0;
   }
 
   .preview {
+    height: 520px;
     min-height: 520px;
   }
 }
@@ -480,6 +492,7 @@ progress::-webkit-progress-value {
   }
 
   .preview {
+    height: 420px;
     min-height: 420px;
   }
 }
