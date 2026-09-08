@@ -193,7 +193,7 @@ function App() {
         canvas.width = Math.max(1, Math.round(photo.width * scale));
         canvas.height = Math.max(1, Math.round(photo.height * scale));
         canvas.getContext('2d')!.drawImage(photo.image, 0, 0, canvas.width, canvas.height);
-        await colorCanvas(canvas, photo.color);
+        await colorCanvas(canvas, photo.color, Math.min(photo.width, photo.height) * canvas.width / photo.width / 1000);
         if (generation === previewGeneration.current) {
           colorPreview.current = { photoId: photo.id, canvas };
           setPreviewRevision(value => value + 1);
@@ -283,14 +283,20 @@ function App() {
   }
 
   function removeSelected() {
-    if (!selectedPhoto) return;
-    const index = photos.findIndex((photo) => photo.id === selectedPhoto.id);
-    setPhotos((items) => items.filter((item) => item.id !== selectedPhoto.id));
-    URL.revokeObjectURL(selectedPhoto.url);
+    if (selectedPhoto) removePhoto(selectedPhoto.id);
+  }
+
+  function removePhoto(id: string) {
+    if (exportLock.current) return;
+    const index = photos.findIndex((photo) => photo.id === id);
+    if (index < 0) return;
+    setPhotos((items) => items.filter((item) => item.id !== id));
+    URL.revokeObjectURL(photos[index].url);
+    resources.current.delete(photos[index].url);
     const next = photos[index + 1] ?? photos[index - 1] ?? null;
-    setSelectedId(next?.id ?? null);
-    setHistory((items) => items.filter((item) => item.id !== selectedPhoto.id));
-    setFailures((items) => items.filter((item) => item.id !== selectedPhoto.id));
+    setSelectedId(current => current === id ? next?.id ?? null : current);
+    setHistory((items) => items.filter((item) => item.id !== id));
+    setFailures((items) => items.filter((item) => item.id !== id));
   }
 
   function clearPhotos() {
@@ -699,7 +705,8 @@ function App() {
           </div>
           <div className="photo-list">
             {photos.map((photo) => (
-              <button key={photo.id} className={`photo-row ${photo.id === selectedId ? 'selected' : ''}`} onClick={() => setSelectedId(photo.id)}>
+              <div key={photo.id} className={`photo-row ${photo.id === selectedId ? 'selected' : ''}`}>
+                <button className="photo-select" aria-pressed={photo.id === selectedId} onClick={() => setSelectedId(photo.id)}>
                 <img src={photo.url} alt="" />
                 <span>
                   <strong>{photo.name}</strong>
@@ -707,7 +714,9 @@ function App() {
                   <em>{photo.status}</em>
                   {photo.color.enabled && <small className="color-badge">调色{photo.color.lutEnabled ? ' + LUT' : ''}</small>}
                 </span>
-              </button>
+                </button>
+                <button className="photo-delete" title={`删除 ${photo.name}`} aria-label={`删除 ${photo.name}`} disabled={exporting} onClick={() => removePhoto(photo.id)}><Trash2 size={15} /></button>
+              </div>
             ))}
           </div>
         </aside>
@@ -716,7 +725,7 @@ function App() {
           {previewBusy && <span className="preview-busy">调色中…</span>}
           {!selectedPhoto && (
             <div className="empty-hint">
-              <strong>添加图片</strong>
+              <button className="primary" onClick={() => fileInputRef.current?.click()}><ImagePlus size={18} />添加图片</button>
               <span>所有处理都在本机完成</span>
             </div>
           )}
@@ -766,11 +775,11 @@ function App() {
               <label className="check-row"><input type="checkbox" checked={color.enabled} onChange={event => updateColor({ enabled: event.target.checked })} />启用当前图片调色</label>
               <fieldset disabled={!color.enabled}>
                 <div className="color-sliders">
-                  {([{ key: 'hue', label: '色相' }, { key: 'saturation', label: '饱和度' }, { key: 'brightness', label: '亮度' }, { key: 'contrast', label: '对比度' }] as const).map(({ key, label }) => (
+                  {([{ key: 'hue', label: '色相' }, { key: 'saturation', label: '饱和度' }, { key: 'brightness', label: '亮度' }, { key: 'contrast', label: '对比度' }, { key: 'clarity', label: '清晰度' }, { key: 'texture', label: '纹理' }] as const).map(({ key, label }) => (
                     <ColorControl key={key} label={label} value={color[key]} onChange={value => updateColor({ [key]: value })} />
                   ))}
                 </div>
-                <div className="color-actions"><button title="还原调色数值" aria-label="还原调色数值" onClick={() => updateColor({ hue: 50, saturation: 50, brightness: 50, contrast: 50 })}><RotateCcw size={15} /></button></div>
+                <div className="color-actions"><button title="还原调色数值" aria-label="还原调色数值" onClick={() => updateColor({ hue: 50, saturation: 50, brightness: 50, contrast: 50, clarity: 0, texture: 0 })}><RotateCcw size={15} /></button></div>
               </fieldset>
                 <div className="lut-controls">
                   <label className="check-row"><input type="checkbox" checked={color.enabled && color.lutEnabled} disabled={lutLoading} onChange={event => { if (event.target.checked) void selectLut(color.lutId || builtinLut.id); else updateColor({ lutEnabled: false }); }} />启用 LUT</label>
@@ -1042,7 +1051,7 @@ async function renderExport(photo: PhotoItem, output: ExportSize, format: string
   const context = canvas.getContext('2d');
   if (!context) throw new Error('无法创建导出画布');
   context.drawImage(photo.image, photo.crop.x, photo.crop.y, photo.crop.width, photo.crop.height, 0, 0, output.width, output.height);
-  await colorCanvas(canvas, photo.color);
+  await colorCanvas(canvas, photo.color, Math.min(photo.width, photo.height) * output.width / photo.crop.width / 1000);
   if (watermark.enabled && watermarkImage) {
     const rect = getWatermarkRect(watermark, output, watermarkImage);
     context.globalAlpha = watermark.opacity / 100;

@@ -244,6 +244,11 @@ progress::-webkit-progress-value {
 .photo-actions button { padding: 7px 5px; gap: 3px; font-size: 12px; flex: 1 0 auto; white-space: nowrap; }
 
 .photo-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid transparent;
+  border-radius: 8px;
   width: calc(100% - 16px);
   min-height: 68px;
   justify-content: flex-start;
@@ -253,6 +258,11 @@ progress::-webkit-progress-value {
   background: transparent;
   text-align: left;
 }
+
+.photo-select { flex: 1; min-width: 0; justify-content: flex-start; padding: 0; border: 0; background: transparent; text-align: left; }
+.photo-select:hover { background: transparent; }
+.photo-delete { flex: 0 0 28px; width: 28px; padding: 5px; background: transparent; border-color: transparent; color: #86868b; }
+.photo-delete:hover { color: #b42318; background: #ffebe9; }
 
 .photo-row.selected {
   background: #e8f1ff;

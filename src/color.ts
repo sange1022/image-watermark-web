@@ -4,6 +4,8 @@ export type ColorSettings = {
   saturation: number;
   brightness: number;
   contrast: number;
+  clarity: number;
+  texture: number;
   lutEnabled: boolean;
   lutId: string;
   intensity: number;
@@ -11,6 +13,7 @@ export type ColorSettings = {
 
 export const defaultColor: ColorSettings = {
   enabled: false, hue: 50, saturation: 50, brightness: 50, contrast: 50,
+  clarity: 0, texture: 0,
   lutEnabled: false, lutId: '', intensity: 100,
 };
 

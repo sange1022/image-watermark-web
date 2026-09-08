@@ -30,11 +30,11 @@ export async function loadCube(file: File, lutId: string): Promise<number> {
   return result.size;
 }
 
-export async function colorCanvas(canvas: HTMLCanvasElement, settings: ColorSettings) {
+export async function colorCanvas(canvas: HTMLCanvasElement, settings: ColorSettings, detailScale?: number) {
   if (!settings.enabled) return;
   const context = canvas.getContext('2d', { willReadFrequently: true });
   if (!context) throw new Error('无法创建调色画布');
   const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
-  const { buffer } = await request({ type: 'apply', buffer: pixels.data.buffer, settings }, [pixels.data.buffer]);
+  const { buffer } = await request({ type: 'apply', buffer: pixels.data.buffer, settings, width: canvas.width, height: canvas.height, detailScale }, [pixels.data.buffer]);
   context.putImageData(new ImageData(new Uint8ClampedArray(buffer), canvas.width, canvas.height), 0, 0);
 }

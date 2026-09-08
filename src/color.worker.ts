@@ -1,6 +1,7 @@
 import { LUTCubeLoader } from 'three/addons/loaders/LUTCubeLoader.js';
 import { FloatType } from 'three';
 import { adjustPixels, type Cube } from './color';
+import { adjustDetails } from './detail';
 
 const cubes = new Map<string, Cube>();
 self.onmessage = ({ data: message }) => {
@@ -34,6 +35,7 @@ self.onmessage = ({ data: message }) => {
       if (message.settings.enabled && message.settings.lutEnabled && !lut) throw new Error('请先导入 LUT 文件');
       const pixels = new Uint8ClampedArray(message.buffer);
       adjustPixels(pixels, message.settings, lut);
+      adjustDetails(pixels, message.width, message.height, message.settings, message.detailScale);
       self.postMessage({ id, buffer: pixels.buffer }, { transfer: [pixels.buffer] });
     }
   } catch (error) { self.postMessage({ id, error: error instanceof Error ? error.message : String(error) }); }
