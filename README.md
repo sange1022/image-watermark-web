@@ -4,6 +4,16 @@
 
 所有图片处理都在浏览器本机完成，不会上传原图。
 
+## 快速调色
+
+每张图片独立保存调色开关、色相、饱和度、亮度、对比度，以及 LUT 和强度。四项基础数值以 50% 为中性值；关闭调色不改变原图颜色。导出先调色再叠加水印。
+
+支持 2 至 65 阶、20 MB 以内的 3D `.cube` LUT，不支持 1D 或混合 LUT。LUT 使用 [Three.js LUTCubeLoader](https://threejs.org/docs/pages/LUTCubeLoader.html) 解析，采用三线性插值和文件的输入范围。基础调整在 sRGB 中进行，之后应用 LUT。适用于普通 sRGB 图片；Log 素材需要与输入色彩空间匹配的 LUT。
+
+预览使用最长边 1000 像素的副本，后台线程处理；导出按所选输出尺寸处理。图片、LUT 及逐图调色参数仅保留在当前页面会话中，刷新后需重新导入。
+
+调色计算测试（Node.js 22.18+）：`npm run test:color`。
+
 ## 本地运行
 
 ```bash
@@ -16,4 +26,3 @@ npm run dev
 ```bash
 npm run build
 ```
-

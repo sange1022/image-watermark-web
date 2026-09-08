@@ -18,6 +18,8 @@ import {
   X,
 } from 'lucide-react';
 import './styles.css';
+import { defaultColor, type ColorSettings } from './color';
+import { colorCanvas, loadCube } from './color-client';
 
 type AspectRatio = { label: string; tag: string; width: number; height: number };
 type CropRect = { x: number; y: number; width: number; height: number };
@@ -44,6 +46,7 @@ type PhotoItem = {
   height: number;
   crop: CropRect;
   status: string;
+  color: ColorSettings;
 };
 
 type ExportSize = { width: number; height: number };
@@ -114,6 +117,16 @@ function App() {
   const [saved] = useState(readSettings);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const watermarkInputRef = useRef<HTMLInputElement>(null);
+  const lutInputRef = useRef<HTMLInputElement>(null);
+  const [luts, setLuts] = useState<{ id: string; name: string; size: number }[]>([]);
+  const [lutLoading, setLutLoading] = useState(false);
+  const [colorError, setColorError] = useState('');
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [previewRevision, setPreviewRevision] = useState(0);
+  const colorPreview = useRef<{ photoId: string; canvas: HTMLCanvasElement } | null>(null);
+  const previewGeneration = useRef(0);
+  const previewWorking = useRef(false);
+  const pendingPreview = useRef<(() => void) | null>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
@@ -145,6 +158,7 @@ function App() {
   >(null);
 
   const selectedPhoto = photos.find((photo) => photo.id === selectedId) ?? null;
+  const color = selectedPhoto?.color ?? defaultColor;
   const sizePresets = useMemo(() => getPresetSizes(aspectRatio), [aspectRatio]);
   const exportSize = sizeIndex < sizePresets.length ? sizePresets[sizeIndex] : customSize;
   const canUseDirectoryPicker = typeof window.showDirectoryPicker === 'function';
@@ -158,7 +172,44 @@ function App() {
 
   useEffect(() => {
     drawPreview();
-  }, [selectedPhoto, watermark, watermarkImage, exportSize]);
+  }, [selectedPhoto, watermark, watermarkImage, exportSize, previewRevision]);
+
+  useEffect(() => {
+    const generation = ++previewGeneration.current;
+    pendingPreview.current = null;
+    setColorError('');
+    if (!selectedPhoto || !color.enabled) { setPreviewBusy(false); return; }
+    const photo = selectedPhoto;
+    setPreviewBusy(true);
+    const run = async () => {
+      previewWorking.current = true;
+      try {
+        const canvas = document.createElement('canvas');
+        const scale = Math.min(1, 1000 / Math.max(photo.width, photo.height));
+        canvas.width = Math.max(1, Math.round(photo.width * scale));
+        canvas.height = Math.max(1, Math.round(photo.height * scale));
+        canvas.getContext('2d')!.drawImage(photo.image, 0, 0, canvas.width, canvas.height);
+        await colorCanvas(canvas, photo.color);
+        if (generation === previewGeneration.current) {
+          colorPreview.current = { photoId: photo.id, canvas };
+          setPreviewRevision(value => value + 1);
+        }
+      } catch (error) {
+        if (generation === previewGeneration.current) setColorError(error instanceof Error ? error.message : String(error));
+      } finally {
+        previewWorking.current = false;
+        if (generation === previewGeneration.current) setPreviewBusy(false);
+        const next = pendingPreview.current;
+        pendingPreview.current = null;
+        next?.();
+      }
+    };
+    // Keep only the latest slider state while a preview is being processed.
+    const frame = requestAnimationFrame(() => {
+      if (previewWorking.current) pendingPreview.current = run; else void run();
+    });
+    return () => { cancelAnimationFrame(frame); previewGeneration.current++; pendingPreview.current = null; };
+  }, [selectedPhoto?.id, selectedPhoto?.image, color]);
 
   useEffect(() => {
     const onResize = () => drawPreview();
@@ -215,6 +266,7 @@ function App() {
         height: image.naturalHeight || image.height,
         crop,
         status: '已载入',
+        color: { ...defaultColor },
       });
     }
 
@@ -313,6 +365,26 @@ function App() {
     setStatus(`已选择水印：${file.name}`);
   }
 
+  function updateColor(patch: Partial<ColorSettings>) {
+    if (!selectedPhoto || exportLock.current) return;
+    updatePhoto(selectedPhoto.id, photo => ({ ...photo, color: { ...photo.color, ...patch }, status: '已调整' }));
+  }
+
+  async function importLut(file: File | undefined) {
+    if (!file || !selectedPhoto || lutLoading) return;
+    const photoId = selectedPhoto.id;
+    setLutLoading(true);
+    setColorError('');
+    try {
+      const id = crypto.randomUUID();
+      const size = await loadCube(file, id);
+      setLuts(items => [...items, { id, name: file.name, size }]);
+      updatePhoto(photoId, photo => ({ ...photo, color: { ...photo.color, lutId: id, lutEnabled: true }, status: '已调整' }));
+      setStatus(`已导入 LUT：${file.name}`);
+    } catch (error) { setColorError(error instanceof Error ? error.message : String(error)); }
+    finally { setLutLoading(false); }
+  }
+
   function handlePointerDown(event: React.PointerEvent<HTMLCanvasElement>) {
     if (!selectedPhoto || exporting) return;
     const point = getCanvasPoint(event);
@@ -406,6 +478,7 @@ function App() {
 
   async function exportAll(retryOnly = false) {
     if (exportLock.current) return;
+    if (lutLoading) { setStatus('请等待 LUT 导入完成'); return; }
     const queue = retryOnly ? photos.filter((photo) => failures.some((failure) => failure.id === photo.id)) : photos;
     if (queue.length === 0) {
       setStatus('请先添加图片。');
@@ -499,7 +572,8 @@ function App() {
     if (!selectedPhoto) return;
     const layout = getPreviewLayout(width, height);
     if (!layout) return;
-    context.drawImage(selectedPhoto.image, layout.left, layout.top, layout.width, layout.height);
+    const previewImage = selectedPhoto.color.enabled && colorPreview.current?.photoId === selectedPhoto.id ? colorPreview.current.canvas : selectedPhoto.image;
+    context.drawImage(previewImage, layout.left, layout.top, layout.width, layout.height);
     const crop = toDisplayRect(selectedPhoto.crop, layout);
     context.fillStyle = 'rgba(0, 0, 0, 0.40)';
     context.fillRect(0, 0, width, crop.y);
@@ -608,6 +682,7 @@ function App() {
                   <strong>{photo.name}</strong>
                   <small>{photo.width} × {photo.height}</small>
                   <em>{photo.status}</em>
+                  {photo.color.enabled && <small className="color-badge">调色{photo.color.lutEnabled ? ' + LUT' : ''}</small>}
                 </span>
               </button>
             ))}
@@ -615,6 +690,7 @@ function App() {
         </aside>
 
         <section ref={previewRef} className="preview panel">
+          {previewBusy && <span className="preview-busy">调色中…</span>}
           {!selectedPhoto && (
             <div className="empty-hint">
               <strong>添加图片</strong>
@@ -660,6 +736,34 @@ function App() {
                 <button onClick={() => applyAspectRatio({ label: '自定义比例', tag: 'custom', width: customRatio.width, height: customRatio.height })}>应用</button>
               </div>
             )}
+          </ControlSection>
+
+          <ControlSection title="快速调色">
+            <fieldset disabled={!selectedPhoto}>
+              <label className="check-row"><input type="checkbox" checked={color.enabled} onChange={event => updateColor({ enabled: event.target.checked })} />启用当前图片调色</label>
+              <fieldset disabled={!color.enabled}>
+                <div className="color-sliders">
+                  {([{ key: 'hue', label: '色相' }, { key: 'saturation', label: '饱和度' }, { key: 'brightness', label: '亮度' }, { key: 'contrast', label: '对比度' }] as const).map(({ key, label }) => (
+                    <ColorControl key={key} label={label} value={color[key]} onChange={value => updateColor({ [key]: value })} />
+                  ))}
+                </div>
+                <div className="color-actions"><button title="还原调色数值" aria-label="还原调色数值" onClick={() => updateColor({ hue: 50, saturation: 50, brightness: 50, contrast: 50 })}><RotateCcw size={15} /></button></div>
+                <div className="lut-controls">
+                  <label className="check-row"><input type="checkbox" checked={color.lutEnabled} disabled={!color.lutId} onChange={event => updateColor({ lutEnabled: event.target.checked })} />启用 LUT</label>
+                  <input ref={lutInputRef} type="file" accept=".cube" hidden onChange={event => { void importLut(event.target.files?.[0]); event.target.value = ''; }} />
+                  <div className="lut-file-row">
+                    <select aria-label="当前图片 LUT" value={color.lutId} onChange={event => updateColor({ lutId: event.target.value, lutEnabled: Boolean(event.target.value) })}>
+                      <option value="">未选择 LUT</option>
+                      {luts.map(lut => <option key={lut.id} value={lut.id}>{lut.name} · {lut.size}³</option>)}
+                    </select>
+                    <button disabled={lutLoading} title="导入 .cube LUT" aria-label="导入 LUT" onClick={() => lutInputRef.current?.click()}><Upload size={15} /></button>
+                  </div>
+                  <fieldset disabled={!color.lutEnabled}><ColorControl label="LUT 强度" value={color.intensity} onChange={value => updateColor({ intensity: value })} /></fieldset>
+                  {lutLoading && <p className="note">正在读取 LUT…</p>}
+                </div>
+              </fieldset>
+            </fieldset>
+            {colorError && <p className="color-error" role="alert">{colorError}</p>}
           </ControlSection>
 
           <ControlSection title="水印设置">
@@ -745,6 +849,15 @@ function RangeControl({ label, value, min, max, suffix, onChange }: { label: str
       <strong>{Math.round(value)}{suffix}</strong>
     </div>
   );
+}
+
+function ColorControl({ label, value, onChange }: { label: string; value: number; onChange: (value: number) => void }) {
+  const id = React.useId();
+  return <div className="color-control">
+    <label htmlFor={id}>{label}</label>
+    <input id={id} type="range" min="0" max="100" step="1" value={value} onChange={event => onChange(Number(event.target.value))} />
+    <div className="color-value"><input aria-label={`${label}数值`} type="number" min="0" max="100" step="1" value={value} onChange={event => onChange(clamp(Number(event.target.value), 0, 100))} /><span>%</span></div>
+  </div>;
 }
 
 function loadImage(url: string) {
@@ -906,6 +1019,7 @@ async function renderExport(photo: PhotoItem, output: ExportSize, format: string
   const context = canvas.getContext('2d');
   if (!context) throw new Error('无法创建导出画布');
   context.drawImage(photo.image, photo.crop.x, photo.crop.y, photo.crop.width, photo.crop.height, 0, 0, output.width, output.height);
+  await colorCanvas(canvas, photo.color);
   if (watermark.enabled && watermarkImage) {
     const rect = getWatermarkRect(watermark, output, watermarkImage);
     context.globalAlpha = watermark.opacity / 100;
