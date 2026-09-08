@@ -440,7 +440,7 @@ function App() {
             try { await directoryHandle.getFileHandle(name); exists = true; } catch (error) { if (!(error instanceof DOMException && error.name === 'NotFoundError')) throw error; }
           }
           if (!exists) break;
-          name = baseName.replace(/\.[^.]+$/, `_${suffix++}.${format}`);
+          name = baseName.replace(/\.[^.]+$/, `-${suffix++}.${format}`);
         }
         usedNames.add(name.toLowerCase());
         if (directoryHandle) {
@@ -917,8 +917,8 @@ async function renderExport(photo: PhotoItem, output: ExportSize, format: string
 }
 
 function createOutputName(name: string, format: string, ratio: AspectRatio) {
-  const base = name.replace(/\.[^.]+$/, '');
-  return `${base}_${ratio.width}x${ratio.height}.${format}`;
+  const base = name.replace(/\.[^.]+$/, '').replace(/_/g, '-');
+  return `${base}-${ratio.width}x${ratio.height}.${format}`;
 }
 
 function downloadBlob(blob: Blob, name: string) {
