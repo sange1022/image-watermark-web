@@ -582,10 +582,6 @@ function App() {
           </div>
         </div>
         <fieldset className="toolbar-actions" disabled={exporting}>
-          <input ref={fileInputRef} type="file" accept="image/*" multiple hidden onChange={(event) => addFiles(event.target.files ?? [])} />
-          <button className="primary" onClick={() => fileInputRef.current?.click()}><ImagePlus size={17} />添加图片</button>
-          <button onClick={removeSelected}><Trash2 size={16} />移除</button>
-          <button onClick={clearPhotos}><Eraser size={16} />清空列表</button>
           <button onClick={centerSelectedCrop}><LocateFixed size={16} />居中裁剪</button>
           <button onClick={smartCropSelected}><Brain size={16} />智能定位</button>
           <button title="撤销裁剪" aria-label="撤销裁剪" disabled={!history.length} onClick={undoCrop}><Undo2 size={16} /></button>
@@ -594,6 +590,12 @@ function App() {
 
       <section className="workspace">
         <aside className="panel photo-rail">
+          <fieldset className="photo-actions" disabled={exporting}>
+            <input ref={fileInputRef} type="file" accept="image/*" multiple hidden onChange={(event) => { addFiles(event.target.files ?? []); event.target.value = ''; }} />
+            <button className="primary" onClick={() => fileInputRef.current?.click()}><ImagePlus size={15} />添加图片</button>
+            <button disabled={!selectedPhoto} onClick={removeSelected}><Trash2 size={15} />移除</button>
+            <button disabled={!photos.length} onClick={clearPhotos}><Eraser size={15} />清空列表</button>
+          </fieldset>
           <div className="panel-head">
             <strong>图片列表 · {photos.length} 张</strong>
             <span>{photos.length ? `${photos.filter((photo) => photo.status === '已导出').length} 张已导出` : '尚未添加图片'}</span>
