@@ -20,8 +20,9 @@ const JSZip = require('jszip');
     const rects = Array.from({ length: 30 }, (_, i) => `<rect x="${i * 10}" width="10" height="300" fill="rgb(${80 + i * 3},120,140)"/>`).join('');
     await page.locator('input[type=file][multiple]').setInputFiles({ name: 'test.svg', mimeType: 'image/svg+xml', buffer: Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300">${rects}</svg>`) });
     await page.locator('.photo-row').waitFor();
-    await page.getByLabel('启用 LUT', { exact: true }).check();
+    await page.getByLabel('启用 LUT', { exact: true }).click();
     await page.waitForFunction(() => document.querySelector('select[aria-label="当前图片 LUT"]').value === 'builtin-qingyu-0065');
+    assert.equal(await page.getByLabel('启用 LUT', { exact: true }).isChecked(), true);
     await page.getByLabel('清晰度数值').fill('25');
     await page.getByLabel('纹理数值').fill('20');
     await page.waitForFunction(() => !document.querySelector('.preview-busy'));
@@ -56,5 +57,10 @@ const JSZip = require('jszip');
     await page.screenshot({ path: screenshot, fullPage: true });
     assert.deepEqual(errors, []);
     console.log('PASS: installed desktop opens offline assets, imports images, applies built-in LUT and details, saves PNG without overwriting, exports ZIP, isolated renderer. Screenshot:', screenshot);
+  } catch (error) {
+    const page = await application.firstWindow();
+    console.error(await page.locator('body').innerText().catch(() => 'Page unavailable'));
+    await page.screenshot({ path: screenshot, fullPage: true }).catch(() => {});
+    throw error;
   } finally { await application.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });
