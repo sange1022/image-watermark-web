@@ -1,0 +1,42 @@
+name: Windows installer
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run test:color
+      - run: npm run dist:win
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: Install and test desktop
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem desktop-release/Watermark-Setup-*-win10-x64.exe | Select-Object -First 1
+          $installDirectory = Join-Path $env:RUNNER_TEMP 'WatermarkInstalled'
+          $process = Start-Process -FilePath $installer.FullName -ArgumentList '/S', "/D=$installDirectory" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
+          $env:DESKTOP_EXE = Join-Path $installDirectory 'Watermark.exe'
+          $env:DESKTOP_SCREENSHOT = Join-Path $env:GITHUB_WORKSPACE 'desktop-release/windows-desktop.png'
+          if (!(Test-Path $env:DESKTOP_EXE)) { throw 'Installed executable missing' }
+          npm run test:desktop
+          if ($LASTEXITCODE -ne 0) { throw 'Desktop smoke test failed' }
+          Get-FileHash $installer.FullName -Algorithm SHA256 | Format-List | Out-File desktop-release/SHA256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Watermark-Windows10-x64
+          path: |
+            desktop-release/*Setup*.exe
+            desktop-release/SHA256.txt
+            desktop-release/windows-desktop.png
+          if-no-files-found: error
+          retention-days: 30

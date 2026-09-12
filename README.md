@@ -26,3 +26,11 @@ npm run dev
 ```bash
 npm run build
 ```
+
+## Windows 安装版
+
+`npm run dist:win` 生成 Windows 10/11 x64 的 NSIS 安装包，输出到 `desktop-release/`。内置全部页面、图片处理程序和“青鱼表现0065”LUT，不依赖 GitHub Pages 或额外安装 Node.js。桌面程序支持选择输出文件夹、直接写入图片、打开保存位置，以及 ZIP 导出。
+
+桌面调试：`npm run desktop`。桌面集成测试：`npm run test:desktop`。
+
+GitHub Actions 的 `Windows installer` 工作流会生成安装包，在 Windows runner 上静默安装，再验证启动、LUT、调色、文件导出和防覆盖。该安装包未配置代码签名证书。

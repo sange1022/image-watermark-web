@@ -1,10 +1,16 @@
 {
   "name": "image-watermark-web",
-  "version": "1.0.0",
+  "version": "1.1.0",
+  "description": "Offline batch photo cropping, color adjustment, LUT and watermark tool",
+  "author": "戌無营造",
+  "main": "desktop/main.cjs",
   "private": true,
   "type": "module",
   "scripts": {
     "test:color": "node --test src/color.test.ts",
+    "test:desktop": "node desktop/smoke.cjs",
+    "desktop": "npm run build && electron .",
+    "dist:win": "npm run build && electron-builder --win nsis --x64 --publish never",
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1"
@@ -21,6 +27,8 @@
     "vite": "^7.1.4"
   },
   "devDependencies": {
+    "electron": "44.3.0",
+    "electron-builder": "26.15.3",
     "playwright": "^1.62.1"
   }
 }

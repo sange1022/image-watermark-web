@@ -102,6 +102,11 @@ const defaultWatermark: WatermarkSettings = {
 
 declare global {
   interface Window {
+    desktop?: {
+      chooseOutput: () => Promise<{ name: string } | null>;
+      openOutput: () => Promise<void>;
+      writeImage: (name: string, bytes: Uint8Array) => Promise<string>;
+    };
     showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle>;
   }
 }
@@ -146,6 +151,7 @@ function App() {
   const [watermarkUrl, setWatermarkUrl] = useState('');
   const [watermarkImage, setWatermarkImage] = useState<HTMLImageElement | null>(null);
   const [directoryHandle, setDirectoryHandle] = useState<FileSystemDirectoryHandle | null>(null);
+  const [desktopFolder, setDesktopFolder] = useState<string | null>(null);
   const [status, setStatus] = useState('准备就绪');
   const [exportProgress, setExportProgress] = useState(0);
   const [exporting, setExporting] = useState(false);
@@ -165,7 +171,8 @@ function App() {
   const color = selectedPhoto?.color ?? defaultColor;
   const sizePresets = useMemo(() => getPresetSizes(aspectRatio), [aspectRatio]);
   const exportSize = sizeIndex < sizePresets.length ? sizePresets[sizeIndex] : customSize;
-  const canUseDirectoryPicker = typeof window.showDirectoryPicker === 'function';
+  const canUseDirectoryPicker = Boolean(window.desktop) || typeof window.showDirectoryPicker === 'function';
+  const outputFolderName = desktopFolder ?? directoryHandle?.name;
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -347,6 +354,13 @@ function App() {
   }
 
   async function chooseOutputFolder() {
+    if (window.desktop) {
+      try {
+        const folder = await window.desktop.chooseOutput();
+        if (folder) { setDesktopFolder(folder.name); setStatus(`保存位置：${folder.name}`); }
+      } catch { setStatus('无法选择保存位置，请重试'); }
+      return;
+    }
     if (!window.showDirectoryPicker) {
       setStatus('当前浏览器不支持直接选择保存文件夹，将使用 ZIP 下载。');
       return;
@@ -545,7 +559,9 @@ function App() {
           name = baseName.replace(/\.[^.]+$/, `-${suffix++}.${format}`);
         }
         usedNames.add(name.toLowerCase());
-        if (directoryHandle) {
+        if (desktopFolder && window.desktop) {
+          await window.desktop.writeImage(name, new Uint8Array(await blob.arrayBuffer()));
+        } else if (directoryHandle) {
           const writable = await directoryHandle.getFileHandle(name, { create: true }).then((handle) => handle.createWritable());
           await writable.write(blob);
           await writable.close();
@@ -557,12 +573,12 @@ function App() {
         setFailures([...errors]);
         updatePhoto(photo.id, (item) => ({ ...item, status: '失败' }));
       }
-      setExportProgress(((index + 1) / queue.length) * (directoryHandle ? 100 : 85));
+      setExportProgress(((index + 1) / queue.length) * (outputFolderName ? 100 : 85));
       setStatus(`正在导出 ${index + 1} / ${queue.length} 张`);
       await new Promise((resolve) => window.setTimeout(resolve, 0));
     }
 
-    if (!directoryHandle && completed && !cancelled.current) {
+    if (!outputFolderName && completed && !cancelled.current) {
       setStatus('正在打包 ZIP');
       const blob = await zip.generateAsync({ type: 'blob' }, ({ percent }) => {
         if (cancelled.current) throw new Error('已取消导出');
@@ -573,7 +589,7 @@ function App() {
     }
 
     setStatus(
-      cancelled.current ? `已取消${directoryHandle ? `，已保存 ${completed} 张` : '，未下载 ZIP'}` : `导出完成：成功 ${completed} 张，失败 ${errors.length} 张${completed ? directoryHandle ? ` · ${directoryHandle.name}` : ' · ZIP 已下载' : ''}`,
+      cancelled.current ? `已取消${outputFolderName ? `，已保存 ${completed} 张` : '，未下载 ZIP'}` : `导出完成：成功 ${completed} 张，失败 ${errors.length} 张${completed ? outputFolderName ? ` · ${outputFolderName}` : ' · ZIP 已下载' : ''}`,
     );
     } catch (error) {
       setStatus(cancelled.current ? '已取消导出' : `导出失败：${error instanceof Error ? error.message : String(error)}`);
@@ -840,14 +856,15 @@ function App() {
             </select>
             <label>保存位置</label>
             <div className="path-row">
-              <input readOnly value={directoryHandle?.name ?? '浏览器下载 / ZIP'} />
+              <input readOnly value={outputFolderName ?? '下载 / ZIP'} />
               {canUseDirectoryPicker && <button title="选择保存文件夹" aria-label="选择保存文件夹" onClick={chooseOutputFolder}><FolderOpen size={16} /></button>}
-              {directoryHandle && <button title="改为 ZIP 下载" aria-label="改为 ZIP 下载" onClick={() => setDirectoryHandle(null)}><X size={16} /></button>}
+              {desktopFolder && <button title="打开保存位置" aria-label="打开保存位置" onClick={() => window.desktop?.openOutput().catch(() => setStatus('无法打开保存位置'))}><FolderOpen size={16} /></button>}
+              {outputFolderName && <button title="改为 ZIP 下载" aria-label="改为 ZIP 下载" onClick={() => { setDirectoryHandle(null); setDesktopFolder(null); }}><X size={16} /></button>}
             </div>
           </ControlSection>
           </fieldset>
           <div className="export-actions">
-            <button className="export primary" disabled={!photos.length || exporting} onClick={() => exportAll()}><Download size={17} />{exporting ? '正在导出' : directoryHandle ? '保存到文件夹' : '下载 ZIP'} {photos.length ? `${photos.length} 张` : ''}</button>
+            <button className="export primary" disabled={!photos.length || exporting} onClick={() => exportAll()}><Download size={17} />{exporting ? '正在导出' : outputFolderName ? '保存到文件夹' : '下载 ZIP'} {photos.length ? `${photos.length} 张` : ''}</button>
             {exporting && <button className="cancel" onClick={() => { cancelled.current = true; setStatus('正在取消…'); }}><X size={16} />取消导出</button>}
             <progress aria-label="导出进度" value={exportProgress} max={100} />
             <p className="export-status" role="status">{status}</p>
