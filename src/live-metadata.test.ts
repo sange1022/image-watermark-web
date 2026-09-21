@@ -22,5 +22,5 @@ test('box reader rejects truncation and overflowing atom sizes', () => {
 });
 
 test('metadata adapter rejects unsupported layouts instead of corrupting output', () => {
-  assert.throws(() => addStillTrack(new Uint8Array([1, 2]), mov));
+  assert.throws(() => addStillTrack(new Uint8Array([1, 2]), mov, id), /truncated/);
 });
