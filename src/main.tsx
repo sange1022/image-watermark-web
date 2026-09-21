@@ -14,6 +14,8 @@ import {
   Square,
   Copy,
   ScanLine,
+  Laptop,
+  ExternalLink,
   Move,
   RotateCcw,
   Trash2,
@@ -27,6 +29,9 @@ import { colorCanvas, loadCube } from './color-client';
 import { defaultLive, liveEffects, liveSize, type LiveSettings, type LiveEffect } from './live-motion';
 import { LivePreview, type LiveScene } from './LivePreview';
 import { liveInstructions, liveStem, saveLiveToDirectory } from './live-save';
+import { readHelperToken, helperRequest, makeImportPayload } from './mac-helper';
+import { MacImportBatch } from './mac-batch';
+import type { LivePair } from './live-save';
 
 const builtinLut = { id: 'builtin-qingyu-0065', name: '青鱼表现0065', size: 32 };
 const builtinLutUrl = new URL('./presets/qingyu-0065.cube', import.meta.url).href;
@@ -149,7 +154,13 @@ function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
   const [livePlaying, setLivePlaying] = useState(false);
-  const [failureKind, setFailureKind] = useState<'still' | 'live'>('still');
+  const [failureKind, setFailureKind] = useState<'still' | 'live' | 'mac'>('still');
+  const [macToken] = useState(readHelperToken);
+  const [macConnected, setMacConnected] = useState(false);
+  const [macStatus, setMacStatus] = useState('未连接 Mac 助手');
+  const [macChecking, setMacChecking] = useState(false);
+  const macPending = useRef(new Map<string, { pair: LivePair; name: string; requestId: string }>());
+  const macBatch = useRef(new MacImportBatch());
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>(saved?.aspectRatio ?? aspectRatios[2]);
   const [cropMode, setCropMode] = useState<'smart' | 'center'>(saved?.cropMode ?? 'smart');
@@ -190,6 +201,17 @@ function App() {
   const livePreviewError = useCallback((message: string) => { setLivePlaying(false); setStatus(`实况预览失败：${message}`); }, []);
 
   useEffect(() => { setLivePlaying(false); }, [selectedId, live.enabled, exporting]);
+  useEffect(() => { if (macToken) void checkMacConnection(); }, [macToken]);
+
+  async function checkMacConnection() {
+    setMacChecking(true);
+    try {
+      const result = await helperRequest(macToken, '/status');
+      if (result.version !== 1 || !result.ready) throw new Error('Mac 助手版本不匹配或尚未就绪');
+      setMacConnected(true); setMacStatus('Mac 助手已连接');
+    } catch (error) { setMacConnected(false); setMacStatus(error instanceof Error ? error.message : String(error)); }
+    finally { setMacChecking(false); }
+  }
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -322,9 +344,13 @@ function App() {
     setSelectedId(current => current === id ? next?.id ?? null : current);
     setHistory((items) => items.filter((item) => item.id !== id));
     setFailures((items) => items.filter((item) => item.id !== id));
+    macPending.current.delete(id);
+    macBatch.current.remove(id);
   }
 
   function clearPhotos() {
+    macPending.current.clear();
+    macBatch.current.clear();
     photos.forEach((photo) => URL.revokeObjectURL(photo.url));
     setPhotos([]);
     setSelectedId(null);
@@ -668,6 +694,57 @@ function App() {
     finally { exportLock.current = false; setExporting(false); }
   }
 
+  async function sendToMac() {
+    if (exportLock.current || !macConnected) return;
+    if (lutLoading) { setStatus('请等待 LUT 导入完成'); return; }
+    const ids = macBatch.current.queue(photos.filter(photo => photo.live.enabled || macPending.current.has(photo.id)).map(photo => photo.id));
+    const queue = photos.filter(photo => ids.includes(photo.id));
+    if (!queue.length) return;
+    if (![exportSize.width, exportSize.height].every(n => Number.isInteger(n) && n >= 2 && n <= 8192)) { setStatus('实况导出尺寸须为 2 至 8192 的整数'); return; }
+    if (watermark.enabled && !watermarkImage) { setStatus('请先选择水印图片'); return; }
+    // Keep unresolved pairs until an explicit retry succeeds; do not regenerate their asset IDs.
+    exportLock.current = true; cancelled.current = false;
+    setExporting(true); setFailures([]); setFailureKind('mac'); setExportProgress(0);
+    const errors: { id: string; name: string; reason: string }[] = [];
+    let completed = 0;
+    try {
+      const { encodeLivePhoto } = await import('./live-export');
+      for (const [index, photo] of queue.entries()) {
+        if (cancelled.current) break;
+        setStatus(`正在发送到 Mac 照片 ${index + 1} / ${queue.length}：${photo.name}`);
+        updatePhoto(photo.id, item => ({ ...item, status: '正在发送实况' }));
+        try {
+          let pending = macPending.current.get(photo.id);
+          if (!pending) {
+            const scene = await prepareLiveScene(photo, exportSize, watermark, watermarkImage);
+            const pair = await encodeLivePhoto(scene.source, photo.live.effect, scene.overlay, () => cancelled.current, value => setExportProgress((index + value * 0.85) / queue.length * 100));
+            if (cancelled.current) { updatePhoto(photo.id, item => ({ ...item, status: '已取消' })); break; }
+            pending = { pair, name: liveStem(photo.name, aspectRatio.width, aspectRatio.height), requestId: crypto.randomUUID() };
+          }
+          setStatus(`正在存入照片 ${index + 1} / ${queue.length}，首次请在 Mac 助手中允许添加照片`);
+          const payload = makeImportPayload(pending.requestId, pending.name, pending.pair);
+          macPending.current.set(photo.id, pending);
+          await helperRequest(macToken, '/import', payload);
+          macPending.current.delete(photo.id);
+          macBatch.current.saved(photo.id);
+          completed++;
+          updatePhoto(photo.id, item => ({ ...item, status: '已存入 Mac 照片' }));
+        } catch (error) {
+          if (cancelled.current && !macPending.current.has(photo.id)) { updatePhoto(photo.id, item => ({ ...item, status: '已取消' })); break; }
+          errors.push({ id: photo.id, name: photo.name, reason: error instanceof Error ? error.message : String(error) });
+          setFailures([...errors]);
+          updatePhoto(photo.id, item => ({ ...item, status: '发送失败' }));
+          // Don't accumulate a whole batch of large pending pairs when the helper is unavailable.
+          break;
+        }
+        setExportProgress((index + 1) / queue.length * 100);
+      }
+      setStatus(`${cancelled.current ? '发送已停止' : '发送结束'}：已存入 ${completed} 张${errors.length ? `，失败 ${errors.length} 张` : ''}；未处理的图片仍在列表中`);
+      if (completed) await helperRequest(macToken, '/open-photos').catch(() => {});
+    } catch (error) { setStatus(`发送失败：${error instanceof Error ? error.message : String(error)}`); }
+    finally { exportLock.current = false; setExporting(false); }
+  }
+
   function drawPreview() {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -769,10 +846,11 @@ function App() {
           <div className="brand-mark">水印</div>
           <div>
             <h1>戌無营造的剃刀</h1>
-            <p>离线批量裁剪与水印</p>
+            <p>Mac 助手试用版 · 原版保留</p>
           </div>
         </div>
         <fieldset className="toolbar-actions" disabled={exporting}>
+          <a className="stable-link" href="https://sange1022.github.io/image-watermark-web/">返回正式版</a>
           <button onClick={centerSelectedCrop}><LocateFixed size={16} />居中裁剪</button>
           <button onClick={smartCropSelected}><Brain size={16} />智能定位</button>
           <button title="撤销裁剪" aria-label="撤销裁剪" disabled={!history.length} onClick={undoCrop}><Undo2 size={16} /></button>
@@ -925,6 +1003,15 @@ function App() {
             </fieldset>
           </ControlSection>
 
+          <ControlSection title="Mac 照片 · 试用">
+            <div className="mac-actions">
+              <button onClick={() => { window.location.href = 'watermark-helper://open'; }}><Laptop size={15} />打开 Mac 助手</button>
+              <button disabled={macChecking} onClick={() => void checkMacConnection()}><RotateCcw size={15} />检查连接</button>
+            </div>
+            <p className={macConnected ? 'mac-status connected' : 'mac-status'} role="status">{macStatus}</p>
+            {macConnected && <button onClick={() => helperRequest(macToken, '/open-photos').catch(error => setMacStatus(error.message))}><ExternalLink size={15} />打开 Mac 照片</button>}
+          </ControlSection>
+
           <ControlSection title="导出设置">
             <label>图片尺寸</label>
             <select aria-label="图片尺寸" value={sizeIndex} onChange={(event) => setSizeIndex(Number(event.target.value))}>
@@ -956,10 +1043,11 @@ function App() {
           <div className="export-actions">
             <button className="export primary" disabled={!photos.length || exporting} onClick={() => exportAll()}><Download size={17} />{exporting ? '正在导出' : outputFolderName ? '保存到文件夹' : '下载 ZIP'} {photos.length ? `${photos.length} 张` : ''}</button>
             <button className="export live-export" disabled={!liveCount || exporting} onClick={() => exportLive()}><ScanLine size={17} />导出实况照片 {liveCount} 张</button>
-            {exporting && <button className="cancel" onClick={() => { cancelled.current = true; setStatus('正在取消…'); }}><X size={16} />取消导出</button>}
+            <button className="export mac-export" disabled={(!liveCount && !macPending.current.size) || exporting || !macConnected} onClick={() => sendToMac()}><Laptop size={17} />{macBatch.current.remainingCount ? `继续发送 ${macBatch.current.remainingCount} 张` : `发送到 Mac 照片 ${liveCount} 张`}</button>
+            {exporting && <button className="cancel" onClick={() => { cancelled.current = true; setStatus(failureKind === 'mac' ? '正在停止，已提交到照片的当前项会完成保存' : '正在取消…'); }}><X size={16} />取消导出</button>}
             <progress aria-label="导出进度" value={exportProgress} max={100} />
             <p className="export-status" role="status">{status}</p>
-            {failures.length > 0 && <div className="failures"><strong>失败 {failures.length} 张</strong><ul>{failures.map((failure) => <li key={failure.id}>{failure.name}：{failure.reason}</li>)}</ul><button disabled={exporting} onClick={() => failureKind === 'live' ? exportLive(true) : exportAll(true)}><RotateCcw size={16} />重试失败项</button></div>}
+            {failures.length > 0 && <div className="failures"><strong>失败 {failures.length} 张</strong><ul>{failures.map((failure) => <li key={failure.id}>{failure.name}：{failure.reason}</li>)}</ul><button disabled={exporting} onClick={() => failureKind === 'mac' ? sendToMac() : failureKind === 'live' ? exportLive(true) : exportAll(true)}><RotateCcw size={16} />{failureKind === 'mac' ? '继续未完成发送' : '重试失败项'}</button></div>}
           </div>
         </aside>
       </section>

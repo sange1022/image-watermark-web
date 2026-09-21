@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleExecutable</key><string>WatermarkPhotoHelper</string>
+  <key>CFBundleIdentifier</key><string>com.xuwuyingzao.watermark-photo-helper.trial</string>
+  <key>CFBundleName</key><string>水印实况助手（试用）</string>
+  <key>CFBundleDisplayName</key><string>水印实况助手（试用）</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>0.1.0</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <key>NSPrincipalClass</key><string>NSApplication</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSPhotoLibraryAddUsageDescription</key><string>将你在水印网页中生成的实况照片直接添加到 Mac 照片图库，省去手动导入。不会读取或删除已有照片。</string>
+  <key>NSPhotoLibraryUsageDescription</key><string>仅用于将你生成的实况照片存入图库，不读取或删除已有照片。</string>
+  <key>CFBundleURLTypes</key><array><dict>
+    <key>CFBundleURLName</key><string>WatermarkPhotoHelper</string>
+    <key>CFBundleURLSchemes</key><array><string>watermark-helper</string></array>
+  </dict></array>
+</dict></plist>

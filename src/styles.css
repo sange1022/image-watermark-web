@@ -36,6 +36,12 @@ button:focus-visible { outline: 3px solid #80baff; outline-offset: 2px; }
 .preview .live-canvas { width: 100%; height: 100%; object-fit: contain; }
 .stop-live { position: absolute; left: 12px; top: 12px; z-index: 2; }
 .export.live-export { margin-top: 8px; color: #18715c; border-color: #a6cdbf; }
+.stable-link { color: #0066cc; font-size: 12px; padding: 8px 4px; white-space: nowrap; }
+.mac-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.mac-actions button { padding: 7px 8px; }
+.mac-status { font-size: 12px; line-height: 1.5; color: #8b5a00; overflow-wrap: anywhere; }
+.mac-status.connected { color: #18715c; }
+.export.mac-export { margin-top: 8px; background: #18715c; border-color: #18715c; color: white; }
 .preview-busy { position: absolute; top: 12px; right: 12px; z-index: 1; padding: 5px 8px; background: #ffffffed; border-radius: 4px; font-size: 11px; color: #6e6e73; pointer-events: none; }
 fieldset:disabled .color-control { opacity: .5; }
 .cancel { width: 100%; margin: 8px 0; }

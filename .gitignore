@@ -1,6 +1,9 @@
 node_modules/
+/node_modules
 dist/
 desktop-release/
 .DS_Store
 qa-*.png
 qa-*.svg
+mac-helper/.build/
+mac-helper/dist/
