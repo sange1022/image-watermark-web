@@ -42,6 +42,27 @@ const JSZip = require('jszip');
     await page.waitForFunction(() => !document.querySelector('fieldset.toolbar-actions').disabled);
     assert.deepEqual(await fs.readFile(path.join(output, 'test-3x4.png')), original);
     assert.ok((await fs.stat(path.join(output, 'test-3x4-1.png'))).size > 0);
+    await page.getByLabel('启用当前图片实况').check();
+    await page.getByLabel('实况动画').selectOption('zoom-out');
+    await page.getByRole('button', { name: '导出实况照片 1 张', exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('.export-status').textContent.includes('实况导出完成'), undefined, { timeout: 120000 });
+    assert.ok((await fs.stat(path.join(output, 'test-3x4-实况.mov'))).size > 1000);
+    assert.ok((await fs.stat(path.join(output, 'test-3x4-实况.jpg'))).size > 1000);
+    const liveJpg = await fs.readFile(path.join(output, 'test-3x4-实况.jpg'));
+    const liveMov = await fs.readFile(path.join(output, 'test-3x4-实况.mov'));
+    const identifier = liveJpg.toString('binary').match(/[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}/i)?.[0];
+    assert.ok(identifier && liveMov.includes(Buffer.from(identifier)));
+    assert.ok(liveMov.includes(Buffer.from('com.apple.quicktime.still-image-time')));
+    // Preserve real Windows-generated pairs for independent Apple Photos validation.
+    if (process.env.DESKTOP_SCREENSHOT) {
+      await fs.copyFile(path.join(output, 'test-3x4-实况.jpg'), path.join(path.dirname(screenshot), 'windows-live.jpg'));
+      await fs.copyFile(path.join(output, 'test-3x4-实况.mov'), path.join(path.dirname(screenshot), 'windows-live.mov'));
+    }
+    await page.getByRole('button', { name: '导出实况照片 1 张', exact: true }).click();
+    await page.waitForFunction(() => !document.querySelector('fieldset.toolbar-actions').disabled);
+    assert.deepEqual(await fs.readFile(path.join(output, 'test-3x4-实况.jpg')), liveJpg);
+    assert.ok((await fs.stat(path.join(output, 'test-3x4-实况-1.mov'))).size > 1000);
+    assert.ok((await fs.stat(path.join(output, 'test-3x4-实况-1.jpg'))).size > 1000);
     const zipPath = path.join(output, 'export.zip');
     await application.evaluate(({ BrowserWindow }, target) => { BrowserWindow.getAllWindows()[0].webContents.session.once('will-download', (_event, item) => item.setSavePath(target)); }, zipPath);
     await page.getByRole('button', { name: '改为 ZIP 下载', exact: true }).click();
@@ -56,7 +77,7 @@ const JSZip = require('jszip');
     await page.locator('.inspector').evaluate(element => { element.scrollTop = 200; });
     await page.screenshot({ path: screenshot, fullPage: true });
     assert.deepEqual(errors, []);
-    console.log('PASS: installed desktop opens offline assets, imports images, applies built-in LUT and details, saves PNG without overwriting, exports ZIP, isolated renderer. Screenshot:', screenshot);
+    console.log('PASS: offline assets, built-in LUT and details, PNG export, Live Photo H.264 encoding and paired folder saving without overwrites, ZIP export, isolated renderer. Screenshot:', screenshot);
   } catch (error) {
     const page = await application.firstWindow();
     console.error(await page.locator('body').innerText().catch(() => 'Page unavailable'));

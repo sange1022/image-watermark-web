@@ -2,6 +2,7 @@ const { app, BrowserWindow, Menu, dialog, ipcMain, net, protocol, shell } = requ
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { pathToFileURL } = require('node:url');
+const { writeLivePair } = require('./save-live.cjs');
 
 protocol.registerSchemesAsPrivileged([{ scheme: 'watermark', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } }]);
 let mainWindow;
@@ -70,6 +71,11 @@ app.whenReady().then(() => {
       return candidate;
     }
     throw new Error('同名文件过多，请更换保存位置');
+  });
+  ipcMain.handle('output:live', async (event, name, jpg, mov) => {
+    trusted(event);
+    if (!outputDirectory) throw new Error('请先选择保存位置');
+    return writeLivePair(outputDirectory, name, jpg, mov);
   });
   mainWindow.loadURL(origin + '/index.html');
 });

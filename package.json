@@ -1,12 +1,13 @@
 {
   "name": "image-watermark-web",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Offline batch photo cropping, color adjustment, LUT and watermark tool",
   "author": "戌無营造",
   "main": "desktop/main.cjs",
   "private": true,
   "type": "module",
   "scripts": {
+    "test": "node --test src/*.test.ts desktop/save-live.test.cjs",
     "test:color": "node --test src/color.test.ts",
     "test:desktop": "node desktop/smoke.cjs",
     "desktop": "npm run build && electron .",
@@ -19,6 +20,8 @@
     "@vitejs/plugin-react": "^5.0.2",
     "jszip": "^3.10.1",
     "lucide-react": "^0.542.0",
+    "mediabunny": "^1.58.1",
+    "piexifjs": "^1.0.6",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
     "stackblur-canvas": "^3.0.1",

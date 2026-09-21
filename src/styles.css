@@ -26,6 +26,16 @@ button:focus-visible { outline: 3px solid #80baff; outline-offset: 2px; }
 .lut-file-row button { padding: 7px 9px; flex: 0 0 auto; }
 .color-error { font-size: 12px; color: #b42318; overflow-wrap: anywhere; }
 .photo-row .color-badge { color: #23836b; }
+.photo-row .live-badge { color: #9b7013; }
+.live-options { display: flex; align-items: center; gap: 8px; }
+.live-options select { min-width: 0; flex: 1; }
+.live-options span { font-size: 12px; white-space: nowrap; color: #6e6e73; }
+.live-options button { width: 34px; padding: 7px; flex-shrink: 0; }
+.live-apply { margin-top: 10px; }
+.live-preview { position: absolute; inset: 26px; }
+.preview .live-canvas { width: 100%; height: 100%; object-fit: contain; }
+.stop-live { position: absolute; left: 12px; top: 12px; z-index: 2; }
+.export.live-export { margin-top: 8px; color: #18715c; border-color: #a6cdbf; }
 .preview-busy { position: absolute; top: 12px; right: 12px; z-index: 1; padding: 5px 8px; background: #ffffffed; border-radius: 4px; font-size: 11px; color: #6e6e73; pointer-events: none; }
 fieldset:disabled .color-control { opacity: .5; }
 .cancel { width: 100%; margin: 8px 0; }

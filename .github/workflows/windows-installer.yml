@@ -14,7 +14,7 @@ jobs:
           node-version: '24'
           cache: npm
       - run: npm ci
-      - run: npm run test:color
+      - run: npm test
       - run: npm run dist:win
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
@@ -38,5 +38,7 @@ jobs:
             desktop-release/*Setup*.exe
             desktop-release/SHA256.txt
             desktop-release/windows-desktop.png
+            desktop-release/windows-live.jpg
+            desktop-release/windows-live.mov
           if-no-files-found: error
           retention-days: 30

@@ -8,6 +8,7 @@ files:
   - dist/**/*
   - desktop/main.cjs
   - desktop/preload.cjs
+  - desktop/save-live.cjs
   - desktop/app.ico
   - package.json
   - '!node_modules/**/*'

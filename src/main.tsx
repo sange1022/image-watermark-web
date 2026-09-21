@@ -10,6 +10,10 @@ import {
   FolderOpen,
   ImagePlus,
   LocateFixed,
+  Play,
+  Square,
+  Copy,
+  ScanLine,
   Move,
   RotateCcw,
   Trash2,
@@ -20,6 +24,9 @@ import {
 import './styles.css';
 import { defaultColor, type ColorSettings } from './color';
 import { colorCanvas, loadCube } from './color-client';
+import { defaultLive, liveEffects, liveSize, type LiveSettings, type LiveEffect } from './live-motion';
+import { LivePreview, type LiveScene } from './LivePreview';
+import { liveInstructions, liveStem, saveLiveToDirectory } from './live-save';
 
 const builtinLut = { id: 'builtin-qingyu-0065', name: '青鱼表现0065', size: 32 };
 const builtinLutUrl = new URL('./presets/qingyu-0065.cube', import.meta.url).href;
@@ -50,6 +57,7 @@ type PhotoItem = {
   crop: CropRect;
   status: string;
   color: ColorSettings;
+  live: LiveSettings;
 };
 
 type ExportSize = { width: number; height: number };
@@ -106,6 +114,7 @@ declare global {
       chooseOutput: () => Promise<{ name: string } | null>;
       openOutput: () => Promise<void>;
       writeImage: (name: string, bytes: Uint8Array) => Promise<string>;
+      writeLivePair: (name: string, jpg: Uint8Array, mov: Uint8Array) => Promise<string>;
     };
     showDirectoryPicker?: () => Promise<FileSystemDirectoryHandle>;
   }
@@ -139,6 +148,8 @@ function App() {
   const previewRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
+  const [livePlaying, setLivePlaying] = useState(false);
+  const [failureKind, setFailureKind] = useState<'still' | 'live'>('still');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [aspectRatio, setAspectRatio] = useState<AspectRatio>(saved?.aspectRatio ?? aspectRatios[2]);
   const [cropMode, setCropMode] = useState<'smart' | 'center'>(saved?.cropMode ?? 'smart');
@@ -169,10 +180,16 @@ function App() {
 
   const selectedPhoto = photos.find((photo) => photo.id === selectedId) ?? null;
   const color = selectedPhoto?.color ?? defaultColor;
+  const live = selectedPhoto?.live ?? defaultLive;
+  const liveCount = photos.filter(photo => photo.live.enabled).length;
   const sizePresets = useMemo(() => getPresetSizes(aspectRatio), [aspectRatio]);
   const exportSize = sizeIndex < sizePresets.length ? sizePresets[sizeIndex] : customSize;
   const canUseDirectoryPicker = Boolean(window.desktop) || typeof window.showDirectoryPicker === 'function';
-  const outputFolderName = desktopFolder ?? directoryHandle?.name;
+  const outputFolderName = desktopFolder ?? (directoryHandle ? directoryHandle.name || '所选文件夹' : undefined);
+  const prepareLivePreview = useCallback(() => prepareLiveScene(selectedPhoto!, exportSize, watermark, watermarkImage), [selectedPhoto, exportSize.width, exportSize.height, watermark, watermarkImage]);
+  const livePreviewError = useCallback((message: string) => { setLivePlaying(false); setStatus(`实况预览失败：${message}`); }, []);
+
+  useEffect(() => { setLivePlaying(false); }, [selectedId, live.enabled, exporting]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -278,6 +295,7 @@ function App() {
         crop,
         status: '已载入',
         color: { ...defaultColor },
+        live: { ...defaultLive },
       });
     }
 
@@ -534,6 +552,7 @@ function App() {
     setExporting(true);
     setExportProgress(0);
     setFailures([]);
+    setFailureKind('still');
     const errors: { id: string; name: string; reason: string }[] = [];
     const zip = new JSZip();
     let completed = 0;
@@ -594,6 +613,59 @@ function App() {
     } catch (error) {
       setStatus(cancelled.current ? '已取消导出' : `导出失败：${error instanceof Error ? error.message : String(error)}`);
     } finally { exportLock.current = false; setExporting(false); }
+  }
+
+  async function exportLive(retryOnly = false) {
+    if (exportLock.current) return;
+    if (lutLoading) { setStatus('请等待 LUT 导入完成'); return; }
+    const queue = photos.filter(photo => photo.live.enabled && (!retryOnly || failures.some(f => f.id === photo.id)));
+    if (!queue.length) { setStatus('请先为图片启用实况'); return; }
+    if (![exportSize.width, exportSize.height].every(n => Number.isInteger(n) && n >= 2 && n <= 8192)) { setStatus('实况导出尺寸须为 2 至 8192 的整数'); return; }
+    if (watermark.enabled && !watermarkImage) { setStatus('请先选择水印图片'); return; }
+    exportLock.current = true;
+    cancelled.current = false;
+    setExporting(true); setExportProgress(0); setFailures([]); setFailureKind('live');
+    const errors: { id: string; name: string; reason: string }[] = [];
+    const zip = new JSZip();
+    const names = new Set<string>();
+    let completed = 0;
+    try {
+      const { encodeLivePhoto } = await import('./live-export');
+      for (const [index, photo] of queue.entries()) {
+        if (cancelled.current) break;
+        setStatus(`正在生成实况 ${index + 1} / ${queue.length}：${photo.name}`);
+        updatePhoto(photo.id, item => ({ ...item, status: '正在生成实况' }));
+        try {
+          const { source, overlay } = await prepareLiveScene(photo, exportSize, watermark, watermarkImage);
+          const pair = await encodeLivePhoto(source, photo.live.effect, overlay, () => cancelled.current, value => setExportProgress((index + value) / queue.length * 90));
+          if (cancelled.current) throw new DOMException('已取消', 'AbortError');
+          const base = liveStem(photo.name, aspectRatio.width, aspectRatio.height);
+          let name = base;
+          for (let suffix = 1; names.has(name.toLowerCase()); suffix++) name = `${base}-${suffix}`;
+          if (desktopFolder && window.desktop) await window.desktop.writeLivePair(name, pair.jpg, pair.mov);
+          else if (directoryHandle) await saveLiveToDirectory(directoryHandle, name, pair);
+          else { zip.file(`${name}.jpg`, pair.jpg); zip.file(`${name}.mov`, pair.mov); }
+          names.add(name.toLowerCase());
+          completed++;
+          updatePhoto(photo.id, item => ({ ...item, status: '实况已导出' }));
+        } catch (error) {
+          if (cancelled.current) { updatePhoto(photo.id, item => ({ ...item, status: '已取消' })); break; }
+          errors.push({ id: photo.id, name: photo.name, reason: error instanceof Error ? error.message : String(error) });
+          setFailures([...errors]);
+          updatePhoto(photo.id, item => ({ ...item, status: '实况导出失败' }));
+        }
+      }
+      // A cancelled batch still downloads its completed pairs; never discard already completed work.
+      if (!outputFolderName && completed) {
+        setStatus('正在打包已完成的实况照片');
+        zip.file('实况导入说明.txt', liveInstructions);
+        const blob = await zip.generateAsync({ type: 'blob' }, ({ percent }) => setExportProgress(90 + percent / 10));
+        downloadBlob(blob, `实况照片-${new Date().toISOString().slice(0, 10)}.zip`);
+      }
+      setExportProgress(cancelled.current ? completed / queue.length * 100 : 100);
+      setStatus(`${cancelled.current ? '实况导出已取消' : '实况导出完成'}：成功 ${completed} 张，失败 ${errors.length} 张${completed ? outputFolderName ? ` · ${outputFolderName}` : ' · ZIP 已下载' : ''}`);
+    } catch (error) { setStatus(`实况导出失败：${error instanceof Error ? error.message : String(error)}`); }
+    finally { exportLock.current = false; setExporting(false); }
   }
 
   function drawPreview() {
@@ -729,6 +801,7 @@ function App() {
                   <small>{photo.width} × {photo.height}</small>
                   <em>{photo.status}</em>
                   {photo.color.enabled && <small className="color-badge">调色{photo.color.lutEnabled ? ' + LUT' : ''}</small>}
+                  {photo.live.enabled && <small className="live-badge">LIVE · {liveEffects.find(effect => effect.id === photo.live.effect)?.label}</small>}
                 </span>
                 </button>
                 <button className="photo-delete" title={`删除 ${photo.name}`} aria-label={`删除 ${photo.name}`} disabled={exporting} onClick={() => removePhoto(photo.id)}><Trash2 size={15} /></button>
@@ -738,6 +811,8 @@ function App() {
         </aside>
 
         <section ref={previewRef} className="preview panel">
+          {livePlaying && selectedPhoto && <LivePreview prepare={prepareLivePreview} effect={live.effect} onError={livePreviewError} />}
+          {livePlaying && <button className="stop-live" title="停止实况预览" aria-label="停止实况预览" onClick={() => setLivePlaying(false)}><Square size={15} />LIVE · 3 秒</button>}
           {previewBusy && <span className="preview-busy">调色中…</span>}
           {!selectedPhoto && (
             <div className="empty-hint">
@@ -747,6 +822,7 @@ function App() {
           )}
           <canvas
             ref={canvasRef}
+            style={livePlaying ? { visibility: 'hidden' } : undefined}
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
             onPointerUp={(event) => {
@@ -835,6 +911,20 @@ function App() {
             <RangeControl label="边距" value={watermark.margin} min={0} max={300} suffix="px" onChange={(value) => setWatermark({ ...watermark, margin: value })} />
           </ControlSection>
 
+          <ControlSection title="实况照片">
+            <fieldset disabled={!selectedPhoto}>
+              <label className="check-row"><input type="checkbox" checked={live.enabled} onChange={event => selectedPhoto && updatePhoto(selectedPhoto.id, photo => ({ ...photo, live: { ...photo.live, enabled: event.target.checked } }))} />启用当前图片实况</label>
+              <div className="live-options">
+                <select aria-label="实况动画" disabled={!live.enabled} value={live.effect} onChange={event => selectedPhoto && updatePhoto(selectedPhoto.id, photo => ({ ...photo, live: { ...photo.live, effect: event.target.value as LiveEffect } }))}>
+                  {liveEffects.map(effect => <option key={effect.id} value={effect.id}>{effect.label}</option>)}
+                </select>
+                <span>3 秒</span>
+                <button title="播放实况预览" aria-label="播放实况预览" disabled={!live.enabled || livePlaying} onClick={() => setLivePlaying(true)}><Play size={16} /></button>
+              </div>
+              <button className="live-apply" aria-label="实况设置应用到全部" onClick={() => { setPhotos(items => items.map(photo => ({ ...photo, live: { ...live } }))); setStatus(`已将实况设置应用到 ${photos.length} 张图片`); }}><Copy size={15} />应用到全部</button>
+            </fieldset>
+          </ControlSection>
+
           <ControlSection title="导出设置">
             <label>图片尺寸</label>
             <select aria-label="图片尺寸" value={sizeIndex} onChange={(event) => setSizeIndex(Number(event.target.value))}>
@@ -865,10 +955,11 @@ function App() {
           </fieldset>
           <div className="export-actions">
             <button className="export primary" disabled={!photos.length || exporting} onClick={() => exportAll()}><Download size={17} />{exporting ? '正在导出' : outputFolderName ? '保存到文件夹' : '下载 ZIP'} {photos.length ? `${photos.length} 张` : ''}</button>
+            <button className="export live-export" disabled={!liveCount || exporting} onClick={() => exportLive()}><ScanLine size={17} />导出实况照片 {liveCount} 张</button>
             {exporting && <button className="cancel" onClick={() => { cancelled.current = true; setStatus('正在取消…'); }}><X size={16} />取消导出</button>}
             <progress aria-label="导出进度" value={exportProgress} max={100} />
             <p className="export-status" role="status">{status}</p>
-            {failures.length > 0 && <div className="failures"><strong>失败 {failures.length} 张</strong><ul>{failures.map((failure) => <li key={failure.id}>{failure.name}：{failure.reason}</li>)}</ul><button disabled={exporting} onClick={() => exportAll(true)}><RotateCcw size={16} />重试失败项</button></div>}
+            {failures.length > 0 && <div className="failures"><strong>失败 {failures.length} 张</strong><ul>{failures.map((failure) => <li key={failure.id}>{failure.name}：{failure.reason}</li>)}</ul><button disabled={exporting} onClick={() => failureKind === 'live' ? exportLive(true) : exportAll(true)}><RotateCcw size={16} />重试失败项</button></div>}
           </div>
         </aside>
       </section>
@@ -1061,7 +1152,7 @@ function moveWatermarkCustom(settings: WatermarkSettings, x: number, y: number, 
   };
 }
 
-async function renderExport(photo: PhotoItem, output: ExportSize, format: string, watermark: WatermarkSettings, watermarkImage: HTMLImageElement | null): Promise<Blob> {
+async function renderPhotoCanvas(photo: PhotoItem, output: ExportSize): Promise<HTMLCanvasElement> {
   const canvas = document.createElement('canvas');
   canvas.width = output.width;
   canvas.height = output.height;
@@ -1069,6 +1160,26 @@ async function renderExport(photo: PhotoItem, output: ExportSize, format: string
   if (!context) throw new Error('无法创建导出画布');
   context.drawImage(photo.image, photo.crop.x, photo.crop.y, photo.crop.width, photo.crop.height, 0, 0, output.width, output.height);
   await colorCanvas(canvas, photo.color, Math.min(photo.width, photo.height) * output.width / photo.crop.width / 1000);
+  return canvas;
+}
+
+async function prepareLiveScene(photo: PhotoItem, output: ExportSize, watermark: WatermarkSettings, watermarkImage: HTMLImageElement | null): Promise<LiveScene> {
+  const scale = Math.min(1, photo.crop.width / output.width, photo.crop.height / output.height);
+  const size = liveSize(output.width * scale, output.height * scale);
+  const source = await renderPhotoCanvas(photo, size);
+  return { source, overlay: context => {
+    if (!watermark.enabled || !watermarkImage) return;
+    const rect = getWatermarkRect(watermark, output, watermarkImage);
+    context.save();
+    context.globalAlpha = watermark.opacity / 100;
+    context.drawImage(watermarkImage, rect.x * size.width / output.width, rect.y * size.height / output.height, rect.width * size.width / output.width, rect.height * size.height / output.height);
+    context.restore();
+  } };
+}
+
+async function renderExport(photo: PhotoItem, output: ExportSize, format: string, watermark: WatermarkSettings, watermarkImage: HTMLImageElement | null): Promise<Blob> {
+  const canvas = await renderPhotoCanvas(photo, output);
+  const context = canvas.getContext('2d')!;
   if (watermark.enabled && watermarkImage) {
     const rect = getWatermarkRect(watermark, output, watermarkImage);
     context.globalAlpha = watermark.opacity / 100;
