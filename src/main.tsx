@@ -974,10 +974,10 @@ function App() {
 
 function ControlSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="control-section">
-      <h2>{title}</h2>
+    <details className="control-section">
+      <summary>{title}</summary>
       {children}
-    </section>
+    </details>
   );
 }
 
