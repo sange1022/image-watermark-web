@@ -380,7 +380,7 @@ function App() {
       return;
     }
     if (!window.showDirectoryPicker) {
-      setStatus('当前浏览器不支持直接选择保存文件夹，将使用 ZIP 下载。');
+      setStatus('当前浏览器不支持选择保存文件夹，普通图片将直接下载，实况照片将下载 ZIP。');
       return;
     }
     try {
@@ -554,7 +554,6 @@ function App() {
     setFailures([]);
     setFailureKind('still');
     const errors: { id: string; name: string; reason: string }[] = [];
-    const zip = new JSZip();
     let completed = 0;
     const usedNames = new Set<string>();
     try {
@@ -584,7 +583,10 @@ function App() {
           const writable = await directoryHandle.getFileHandle(name, { create: true }).then((handle) => handle.createWritable());
           await writable.write(blob);
           await writable.close();
-        } else zip.file(name, blob);
+        } else {
+          downloadBlob(blob, name);
+          await new Promise(resolve => window.setTimeout(resolve, 250));
+        }
         completed += 1;
         updatePhoto(photo.id, (item) => ({ ...item, status: '已导出' }));
       } catch (error) {
@@ -592,23 +594,13 @@ function App() {
         setFailures([...errors]);
         updatePhoto(photo.id, (item) => ({ ...item, status: '失败' }));
       }
-      setExportProgress(((index + 1) / queue.length) * (outputFolderName ? 100 : 85));
+      setExportProgress(((index + 1) / queue.length) * 100);
       setStatus(`正在导出 ${index + 1} / ${queue.length} 张`);
       await new Promise((resolve) => window.setTimeout(resolve, 0));
     }
 
-    if (!outputFolderName && completed && !cancelled.current) {
-      setStatus('正在打包 ZIP');
-      const blob = await zip.generateAsync({ type: 'blob' }, ({ percent }) => {
-        if (cancelled.current) throw new Error('已取消导出');
-        setExportProgress(85 + percent * 0.15);
-      });
-      if (cancelled.current) return;
-      downloadBlob(blob, `水印导出-${new Date().toISOString().slice(0, 10)}.zip`);
-    }
-
     setStatus(
-      cancelled.current ? `已取消${outputFolderName ? `，已保存 ${completed} 张` : '，未下载 ZIP'}` : `导出完成：成功 ${completed} 张，失败 ${errors.length} 张${completed ? outputFolderName ? ` · ${outputFolderName}` : ' · ZIP 已下载' : ''}`,
+      cancelled.current ? `已取消，${outputFolderName ? '已保存' : '已发起下载'} ${completed} 张` : `导出完成：${outputFolderName ? '成功' : '已发起图片下载'} ${completed} 张，失败 ${errors.length} 张${completed ? outputFolderName ? ` · ${outputFolderName}` : ' · 若浏览器询问，请允许下载多个文件' : ''}`,
     );
     } catch (error) {
       setStatus(cancelled.current ? '已取消导出' : `导出失败：${error instanceof Error ? error.message : String(error)}`);
@@ -946,15 +938,15 @@ function App() {
             </select>
             <label>保存位置</label>
             <div className="path-row">
-              <input readOnly value={outputFolderName ?? '下载 / ZIP'} />
+              <input readOnly value={outputFolderName ?? '浏览器下载'} />
               {canUseDirectoryPicker && <button title="选择保存文件夹" aria-label="选择保存文件夹" onClick={chooseOutputFolder}><FolderOpen size={16} /></button>}
               {desktopFolder && <button title="打开保存位置" aria-label="打开保存位置" onClick={() => window.desktop?.openOutput().catch(() => setStatus('无法打开保存位置'))}><FolderOpen size={16} /></button>}
-              {outputFolderName && <button title="改为 ZIP 下载" aria-label="改为 ZIP 下载" onClick={() => { setDirectoryHandle(null); setDesktopFolder(null); }}><X size={16} /></button>}
+              {outputFolderName && <button title="改为浏览器下载" aria-label="改为浏览器下载" onClick={() => { setDirectoryHandle(null); setDesktopFolder(null); }}><X size={16} /></button>}
             </div>
           </ControlSection>
           </fieldset>
           <div className="export-actions">
-            <button className="export primary" disabled={!photos.length || exporting} onClick={() => exportAll()}><Download size={17} />{exporting ? '正在导出' : outputFolderName ? '保存到文件夹' : '下载 ZIP'} {photos.length ? `${photos.length} 张` : ''}</button>
+            <button className="export primary" disabled={!photos.length || exporting} onClick={() => exportAll()}><Download size={17} />{exporting ? '正在导出' : outputFolderName ? '保存到文件夹' : '导出图片'} {photos.length ? `${photos.length} 张` : ''}</button>
             <button className="export live-export" disabled={!liveCount || exporting} onClick={() => exportLive()}><ScanLine size={17} />导出实况照片 {liveCount} 张</button>
             {exporting && <button className="cancel" onClick={() => { cancelled.current = true; setStatus('正在取消…'); }}><X size={16} />取消导出</button>}
             <progress aria-label="导出进度" value={exportProgress} max={100} />
