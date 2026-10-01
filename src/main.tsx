@@ -194,6 +194,14 @@ function App() {
 
   useEffect(() => { setLivePlaying(false); }, [selectedId, live.enabled, exporting]);
   useEffect(() => {
+    if (watermarkFile) return;
+    let active = true;
+    loadImage(`${import.meta.env.BASE_URL}default-watermark.png`).then(image => {
+      if (active) setWatermarkImage(image);
+    }).catch(() => { if (active) setStatus('内置水印加载失败，请选择水印文件'); });
+    return () => { active = false; };
+  }, [watermarkFile]);
+  useEffect(() => {
     if (window.desktop) window.desktop.currentOutput().then(folder => setDesktopFolder(folder.name)).catch(error => setStatus(error.message));
   }, []);
 
@@ -899,7 +907,7 @@ function App() {
             <label className="check-row"><input type="checkbox" checked={watermark.enabled} onChange={(event) => setWatermark({ ...watermark, enabled: event.target.checked })} />启用 PNG 水印</label>
             <input ref={watermarkInputRef} type="file" accept="image/png,image/*" hidden onChange={(event) => handleWatermarkUpload(event.target.files)} />
             <div className="path-row">
-              <input readOnly value={watermarkFile?.name ?? ''} placeholder="未选择水印图片" />
+              <input aria-label="水印文件" readOnly value={watermarkFile?.name ?? (watermarkImage ? '戌無营造（内置）.png' : '')} placeholder="正在加载内置水印" />
               <button onClick={() => watermarkInputRef.current?.click()}><Upload size={16} />选择 PNG</button>
             </div>
             <label>位置</label>
