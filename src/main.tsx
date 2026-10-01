@@ -610,11 +610,10 @@ function App() {
     }
 
     setStatus(
-      cancelled.current ? `已取消，${outputFolderName ? '已保存' : '已发起下载'} ${completed} 张` : `导出完成：${outputFolderName ? '成功' : '已发起图片下载'} ${completed} 张，失败 ${errors.length} 张${completed ? outputFolderName ? ` · ${outputFolderName}` : ' · 若浏览器询问，请允许下载多个文件' : ''}`,
+      cancelled.current ? '导出已停止' : errors.length ? '部分图片未导出，请查看失败项' : '导出完成',
     );
     if (window.desktop) {
-      setStatus(cancelled.current ? `导出已停止：成功 ${completed} 张，失败 ${errors.length} 张` : completed === queue.length ? `全部 ${completed} 张图片已保存` : `导出完成：成功 ${completed} 张，失败 ${errors.length} 张`);
-      await window.desktop.completeExport({ total: queue.length, completed, failed: errors.length, cancelled: cancelled.current });
+      await window.desktop.completeExport({ total: queue.length, completed, failed: errors.length, cancelled: cancelled.current }).catch(() => setStatus('图片已保存，可点击“打开保存位置”查看'));
     }
     } catch (error) {
       setStatus(cancelled.current ? '已取消导出' : `导出失败：${error instanceof Error ? error.message : String(error)}`);
@@ -669,7 +668,7 @@ function App() {
         downloadBlob(blob, `实况照片-${new Date().toISOString().slice(0, 10)}.zip`);
       }
       setExportProgress(cancelled.current ? completed / queue.length * 100 : 100);
-      setStatus(`${cancelled.current ? '实况导出已取消' : '实况导出完成'}：成功 ${completed} 张，失败 ${errors.length} 张${completed ? outputFolderName ? ` · ${outputFolderName}` : ' · ZIP 已下载' : ''}`);
+      setStatus(cancelled.current ? '实况导出已取消' : errors.length ? '部分实况未导出，请查看失败项' : '实况导出完成');
     } catch (error) { setStatus(`实况导出失败：${error instanceof Error ? error.message : String(error)}`); }
     finally { exportLock.current = false; setExporting(false); }
   }
@@ -965,7 +964,7 @@ function App() {
             {exporting && <button className="cancel" onClick={() => { cancelled.current = true; setStatus('正在取消…'); }}><X size={16} />取消导出</button>}
             <progress aria-label="导出进度" value={exportProgress} max={100} />
             <p className="export-status" role="status">{status}</p>
-            {failures.length > 0 && <div className="failures"><strong>失败 {failures.length} 张</strong><ul>{failures.map((failure) => <li key={failure.id}>{failure.name}：{failure.reason}</li>)}</ul><button disabled={exporting} onClick={() => failureKind === 'live' ? exportLive(true) : exportAll(true)}><RotateCcw size={16} />重试失败项</button></div>}
+            {failures.length > 0 && <div className="failures"><strong>未导出的图片</strong><ul>{failures.map((failure) => <li key={failure.id}>{failure.name}：{failure.reason}</li>)}</ul><button disabled={exporting} onClick={() => failureKind === 'live' ? exportLive(true) : exportAll(true)}><RotateCcw size={16} />重试失败项</button></div>}
           </div>
         </aside>
       </section>

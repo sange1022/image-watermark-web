@@ -34,14 +34,13 @@ const path = require('node:path');
     await page.getByLabel('输出格式').selectOption('png');
     await page.getByLabel('图片尺寸', { exact: true }).selectOption({ label: '2000 × 2666' });
     await page.getByRole('button', { name: /保存到文件夹/ }).click();
-    await page.waitForFunction(() => document.querySelector('.export-status').textContent.includes('全部 2 张图片已保存') && !document.querySelector('fieldset.toolbar-actions').disabled);
+    await page.waitForFunction(() => document.querySelector('.export-status').textContent === '导出完成' && !document.querySelector('fieldset.toolbar-actions').disabled);
     for (const name of ['smoke-batch-a-3x4.png', 'smoke-batch-b-3x4.png']) {
       const bytes = await fs.readFile(path.join(defaultOutput.name, name));
       assert.equal(bytes.readUInt32BE(16), 2000); assert.equal(bytes.readUInt32BE(20), 2666);
     }
     assert.equal(await application.evaluate(() => global.openedOutput), defaultOutput.name);
-    assert.equal(await application.evaluate(() => global.completionDialogs.length), 1);
-    assert.equal(await application.evaluate(() => global.completionDialogs[0].message), '全部 2 张图片已保存');
+    assert.equal(await application.evaluate(() => global.completionDialogs.length), 0);
     await page.getByRole('button', { name: '清空列表', exact: true }).click();
     await page.locator('summary').filter({ hasText: '导出设置' }).click();
     await page.locator('input[type=file][multiple]').setInputFiles({ name: 'test.svg', mimeType: 'image/svg+xml', buffer: Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300">${rects}</svg>`) });
@@ -66,7 +65,7 @@ const path = require('node:path');
     await page.getByRole('button', { name: '打开保存位置', exact: true }).click();
     assert.equal(await application.evaluate(() => global.openedOutput), output);
     await page.getByRole('button', { name: /保存到文件夹/ }).click();
-    await page.waitForFunction(() => document.querySelector('.export-status').textContent.includes('全部 1 张图片已保存') && !document.querySelector('fieldset.toolbar-actions').disabled);
+    await page.waitForFunction(() => document.querySelector('.export-status').textContent === '导出完成' && !document.querySelector('fieldset.toolbar-actions').disabled);
     const original = await fs.readFile(path.join(output, 'test-3x4.png'));
     assert.equal(original.readUInt32BE(16), 240);
     assert.equal(original.readUInt32BE(20), 320);
@@ -101,7 +100,7 @@ const path = require('node:path');
     await page.locator('.inspector').evaluate(element => { element.scrollTop = 200; });
     await page.screenshot({ path: screenshot, fullPage: true });
     assert.deepEqual(errors, []);
-    console.log('PASS: renamed app, installation-folder default, one-click two-image batch at 2000x2666, single completion dialog and folder open, offline LUT, Live Photos and no overwrites. Screenshot:', screenshot);
+    console.log('PASS: batch folder opens without completion dialogs or result counts, installation-folder default, 2000x2666, offline LUT, Live Photos and no overwrites. Screenshot:', screenshot);
   } catch (error) {
     const page = await application.firstWindow();
     console.error(await page.locator('body').innerText().catch(() => 'Page unavailable'));
