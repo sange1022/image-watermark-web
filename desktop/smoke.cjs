@@ -17,7 +17,8 @@ const path = require('node:path');
     assert.equal(await page.evaluate(() => typeof window.require), 'undefined');
     assert.equal(await page.evaluate(() => typeof window.desktop.chooseOutput), 'function');
     const defaultOutput = await page.evaluate(() => window.desktop.currentOutput());
-    const expectedDefault = await application.evaluate(({ app }) => require('node:path').join(app.isPackaged ? require('node:path').dirname(app.getPath('exe')) : require('node:path').dirname(app.getAppPath()), '导出图片'));
+    const executable = await application.evaluate(({ app }) => app.getPath('exe'));
+    const expectedDefault = path.join(path.dirname(executable), '导出图片');
     // Development runs use the repository root; installed builds use the executable's directory.
     if (process.env.DESKTOP_EXE) assert.equal(defaultOutput.name, expectedDefault);
     assert.equal(path.basename(defaultOutput.name), '导出图片');
