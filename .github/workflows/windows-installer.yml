@@ -21,7 +21,7 @@ jobs:
       - name: Install and test desktop
         shell: pwsh
         run: |
-          $installer = Get-ChildItem desktop-release/Watermark-Setup-*-win10-x64.exe | Select-Object -First 1
+          $installer = Get-ChildItem desktop-release/ImageWatermark-Setup-*-win10-x64.exe | Select-Object -First 1
           $installDirectory = Join-Path $env:RUNNER_TEMP 'WatermarkInstalled'
           $process = Start-Process -FilePath $installer.FullName -ArgumentList '/S', "/D=$installDirectory" -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }

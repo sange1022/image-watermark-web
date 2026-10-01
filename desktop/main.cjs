@@ -15,6 +15,7 @@ function trusted(event) {
 
 app.whenReady().then(() => {
   app.setAppUserModelId('com.xuwuyingzao.watermark');
+  outputDirectory = path.join(app.isPackaged ? path.dirname(app.getPath('exe')) : path.join(__dirname, '..'), '导出图片');
   const root = path.join(__dirname, '..', 'dist');
   protocol.handle('watermark', (request) => {
     const url = new URL(request.url);
@@ -27,7 +28,7 @@ app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
   mainWindow = new BrowserWindow({
     width: 1440, height: 960, minWidth: 1000, minHeight: 700,
-    title: '戌無营造的剃刀 · 水印', backgroundColor: '#f5f5f7',
+    title: '图片加水印', backgroundColor: '#f5f5f7',
     icon: path.join(__dirname, 'app.ico'), show: false,
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true },
   });
@@ -39,12 +40,30 @@ app.whenReady().then(() => {
     responseHeaders: { ...details.responseHeaders, 'Content-Security-Policy': ["default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; worker-src 'self' blob:; connect-src 'self' blob:; object-src 'none'; base-uri 'none'"] },
   }));
 
+  ipcMain.handle('output:current', async (event) => {
+    trusted(event);
+    try { await fs.mkdir(outputDirectory, { recursive: true }); }
+    catch { throw new Error('无法创建导出文件夹，请选择可写的保存位置'); }
+    return { name: outputDirectory };
+  });
   ipcMain.handle('output:choose', async (event) => {
     trusted(event);
     const result = await dialog.showOpenDialog(mainWindow, { title: '选择保存位置', properties: ['openDirectory', 'createDirectory'] });
     if (result.canceled || !result.filePaths[0]) return null;
     outputDirectory = result.filePaths[0];
-    return { name: path.basename(outputDirectory) };
+    return { name: outputDirectory };
+  });
+  ipcMain.handle('output:complete', async (event, result) => {
+    trusted(event);
+    if (!outputDirectory || !result || ![result.total, result.completed, result.failed].every(n => Number.isInteger(n) && n >= 0) || result.completed + result.failed > result.total || typeof result.cancelled !== 'boolean') throw new Error('导出结果无效');
+    const openError = result.completed ? await shell.openPath(outputDirectory) : '';
+    await dialog.showMessageBox(mainWindow, {
+      type: result.failed || openError ? 'warning' : 'info',
+      title: result.cancelled ? '导出已停止' : '导出完成',
+      message: !result.cancelled && result.completed === result.total ? `全部 ${result.total} 张图片已保存` : `已保存 ${result.completed} / ${result.total} 张图片`,
+      detail: `成功 ${result.completed} 张，失败 ${result.failed} 张${result.cancelled ? `，未处理 ${result.total - result.completed - result.failed} 张` : ''}\n保存位置：${outputDirectory}${openError ? '\n文件已保存，但文件夹未能自动打开，可点击“打开保存位置”重试。' : ''}`,
+      buttons: ['确定'],
+    });
   });
   ipcMain.handle('output:open', async (event) => {
     trusted(event);

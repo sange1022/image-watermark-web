@@ -1,6 +1,6 @@
 {
   "name": "image-watermark-web",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Offline batch photo cropping, color adjustment, LUT and watermark tool",
   "author": "戌無营造",
   "main": "desktop/main.cjs",
